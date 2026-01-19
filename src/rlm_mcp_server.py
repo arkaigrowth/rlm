@@ -61,6 +61,78 @@ DEFAULT_MODELS = {
     "openrouter": "openai/gpt-4o-mini",  # Cheapest capable model
 }
 
+# ============================================================================
+# SANDBOX SECURITY: Blocked imports for rlm_exec
+# ============================================================================
+# These modules are blocked because they could allow:
+# - File system access beyond the context (os, pathlib, shutil)
+# - Network access (socket, requests, urllib, http, httpx, aiohttp)
+# - Process spawning (subprocess, multiprocessing)
+# - Code execution (importlib, __import__, exec, eval - handled separately)
+# - System modification (ctypes, cffi)
+BLOCKED_IMPORTS = frozenset({
+    # File system
+    "os", "pathlib", "shutil", "glob", "fnmatch",
+    # Network
+    "socket", "requests", "urllib", "http", "httpx", "aiohttp", "websocket",
+    # Process/threading
+    "subprocess", "multiprocessing", "threading", "concurrent",
+    # Dynamic code loading
+    "importlib", "imp", "pkgutil", "zipimport",
+    # System-level
+    "ctypes", "cffi", "sysconfig",
+    # Potentially dangerous
+    "pickle", "shelve", "marshal",  # Arbitrary code execution via deserialization
+    "pty", "tty", "termios",  # Terminal manipulation
+    "resource",  # Resource limit manipulation
+})
+
+
+def _check_blocked_imports(code: str) -> Optional[str]:
+    """
+    Scan code for blocked imports. Returns error message if blocked import found.
+
+    Checks for:
+    - import <blocked>
+    - from <blocked> import ...
+    - __import__('<blocked>')
+    """
+    # Normalize code for checking
+    lines = code.split('\n')
+
+    for i, line in enumerate(lines, 1):
+        stripped = line.strip()
+
+        # Skip comments and empty lines
+        if stripped.startswith('#') or not stripped:
+            continue
+
+        # Check for direct imports: "import os" or "import os, sys"
+        if stripped.startswith('import '):
+            # Extract module names
+            import_part = stripped[7:].split('#')[0]  # Remove inline comments
+            modules = [m.strip().split('.')[0].split(' ')[0] for m in import_part.split(',')]
+            for module in modules:
+                if module in BLOCKED_IMPORTS:
+                    return f"Line {i}: Blocked import '{module}' - not allowed in sandbox"
+
+        # Check for from imports: "from os import path"
+        if stripped.startswith('from '):
+            # Extract the base module
+            match = re.match(r'from\s+(\w+)', stripped)
+            if match:
+                module = match.group(1)
+                if module in BLOCKED_IMPORTS:
+                    return f"Line {i}: Blocked import 'from {module}' - not allowed in sandbox"
+
+        # Check for __import__ calls
+        if '__import__' in stripped:
+            for blocked in BLOCKED_IMPORTS:
+                if f"__import__('{blocked}" in stripped or f'__import__("{blocked}' in stripped:
+                    return f"Line {i}: Blocked __import__('{blocked}') - not allowed in sandbox"
+
+    return None  # No blocked imports found
+
 
 @dataclass
 class RecursionState:
@@ -1253,6 +1325,11 @@ async def _handle_exec(arguments: dict) -> list[TextContent]:
     code = arguments["code"]
     ctx_name = arguments["context_name"]
     timeout = arguments.get("timeout", 30)
+
+    # SECURITY: Check for blocked imports before execution
+    blocked_error = _check_blocked_imports(code)
+    if blocked_error:
+        return _error_response("blocked_import", f"Security violation: {blocked_error}")
 
     # Ensure context is loaded
     error = _ensure_context_loaded(ctx_name)
