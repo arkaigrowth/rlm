@@ -34,6 +34,12 @@ try:
 except ImportError:
     HAS_CLAUDE_SDK = False
 
+try:
+    import openai
+    HAS_OPENAI = True
+except ImportError:
+    HAS_OPENAI = False
+
 # Storage directories
 DATA_DIR = Path(os.environ.get("RLM_DATA_DIR", "/tmp/rlm"))
 CONTEXTS_DIR = DATA_DIR / "contexts"
@@ -52,6 +58,7 @@ server = Server("rlm")
 DEFAULT_MODELS = {
     "ollama": "olmo-3.1:32b",
     "claude-sdk": "claude-haiku-4-5-20251101",
+    "openrouter": "openai/gpt-4o-mini",  # Cheapest capable model
 }
 
 
@@ -142,7 +149,7 @@ def _context_summary(name: str, content: str, **extra: Any) -> dict:
 # Shared schema fragments for tool definitions
 PROVIDER_SCHEMA = {
     "type": "string",
-    "enum": ["ollama", "claude-sdk"],
+    "enum": ["ollama", "claude-sdk", "openrouter"],
     "description": "LLM provider for sub-call",
     "default": "claude-sdk",
 }
@@ -340,6 +347,79 @@ async def _call_claude_sdk(
         return None, str(e), state
 
 
+async def _call_openrouter(
+    query: str,
+    context_content: str,
+    model: str,
+    tools: list[dict] | None = None,
+    state: Optional["RecursionState"] = None,
+) -> tuple[Optional[str], Optional[str], Optional["RecursionState"]]:
+    """Make a sub-call via OpenRouter API (OpenAI-compatible).
+
+    Supports: openai/*, google/*, z-ai/*, anthropic/* (routed through OpenRouter)
+    Tool calls: YES (via standard function calling format)
+
+    Returns (result, error, updated_state).
+    """
+    if not HAS_OPENAI:
+        return None, "openai package required for openrouter provider (pip install openai)", state
+
+    api_key = os.environ.get("OPENROUTER_API_KEY")
+    if not api_key:
+        return None, "OPENROUTER_API_KEY environment variable not set", state
+
+    try:
+        client = openai.OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=api_key,
+        )
+
+        messages = [
+            {"role": "system", "content": f"Context:\n{context_content}"},
+            {"role": "user", "content": query},
+        ]
+
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "max_tokens": 4096,
+            "temperature": 0.7,
+            "extra_headers": {
+                "HTTP-Referer": "https://github.com/arkaigrowth/arkai",
+                "X-Title": "arkai RLM",
+            },
+        }
+
+        # Add tools if provided (enables agentic behavior)
+        if tools:
+            kwargs["tools"] = tools
+            kwargs["tool_choice"] = "auto"
+
+        response = client.chat.completions.create(**kwargs)
+
+        message = response.choices[0].message
+        result = message.content or ""
+
+        # Handle tool_calls if model invokes tools
+        if tools and message.tool_calls:
+            # For now, return a structured response indicating tool calls
+            # Future: implement tool execution loop like steelman
+            tool_info = [
+                {"name": tc.function.name, "arguments": tc.function.arguments}
+                for tc in message.tool_calls
+            ]
+            result = json.dumps({
+                "text": result,
+                "tool_calls": tool_info,
+                "note": "Tool calls requested but not executed (RLM doesn't auto-execute)"
+            })
+
+        return result, None, state
+
+    except Exception as e:
+        return None, f"OpenRouter error: {str(e)}", state
+
+
 def _get_rlm_tools_for_subcall() -> list[dict]:
     """Generate RLM tool definitions in OpenAI-compatible format for sub-calls.
 
@@ -388,8 +468,10 @@ async def _make_provider_call(
         return await _call_ollama(query, context_content, model, tools, state)
     elif provider == "claude-sdk":
         return await _call_claude_sdk(query, context_content, model, tools, state)
+    elif provider == "openrouter":
+        return await _call_openrouter(query, context_content, model, tools, state)
     else:
-        return None, f"Unknown provider: {provider}", state
+        return None, f"Unknown provider: {provider}. Supported: ollama, claude-sdk, openrouter", state
 
 
 def _chunk_content(content: str, strategy: str, size: int) -> list[str]:
