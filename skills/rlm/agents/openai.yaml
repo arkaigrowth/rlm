@@ -1,0 +1,4 @@
+interface:
+  display_name: "RLM"
+  short_description: "Budgeted recursive long-context analysis workflow"
+  default_prompt: "Use $rlm to analyze large contexts with recursive sub-queries and strict budget guardrails."

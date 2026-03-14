@@ -54,9 +54,27 @@ tests/fixtures/large_*
 # RLM runtime data
 .rlm-data/
 
-# Encyclopedia test corpus - DS_Store only
-docs/encyclopedia/.DS_Store
+# Encyclopedia test corpus (download via scripts/download-encyclopedia.sh)
+docs/encyclopedia/
 
 # Test working files
 docs/working/
-scripts/
+
+# Runtime artifacts and personal data
+RLM_TEST_PROBLEM/
+outputs/
+tmp/
+vendor/
+run_log.md
+docs/rlm-team-guide.md
+
+# Shell wrapper with local paths (users create their own)
+run_rlm.sh
+
+# README process artifacts
+README.beautified.md
+README.original.md
+README.arkai.md
+
+# Generated assets
+assets/

@@ -1,130 +1,168 @@
-# RLM MCP Server
+<div align="center">
 
-Recursive Language Model patterns for Claude Code — handle massive contexts (10M+ tokens) by treating them as external variables.
+# RLM
 
-Based on: https://arxiv.org/html/2512.24601v1
+**Your LLM sees 200K tokens. Your codebase is 10 million.**<br>
+**The answer isn't a bigger context window.**
 
-## How Users Interact
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-3776AB?logo=python&logoColor=white)](https://python.org)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![MCP Compatible](https://img.shields.io/badge/MCP-compatible-8A2BE2)](https://modelcontextprotocol.io)
+[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](https://github.com/arkaigrowth/rlm/releases)
 
-You don't call RLM tools directly. You ask Claude to analyze large files, and Claude uses RLM behind the scenes.
+[Quick Start](#quick-start) · [How It Works](#how-it-works) · [Tools](#tools) · [Providers](#providers) · [Credits](#credits)
 
-**Example:**
-- You say: "Analyze this 2MB log file for errors"
-- Claude uses RLM tools internally
-- You get: "I found 3 error patterns: database timeouts (47), auth failures (23)..."
+</div>
 
-## Core Idea
+---
 
-Instead of feeding massive contexts directly into the LLM:
-1. **Load** context as external variable (stays out of prompt)
-2. **Inspect** structure programmatically
-3. **Chunk** strategically (lines, chars, or paragraphs)
-4. **Sub-query** recursively on chunks
-5. **Aggregate** results for final synthesis
+## The Core Idea
+
+RLM is an MCP server that implements **Recursive Language Model** patterns from [MIT research](https://arxiv.org/abs/2512.24601) by Tian Jin et al. Instead of stuffing massive contexts into your prompt and hoping for the best, RLM treats context as an **external variable** — loading, chunking, and querying it recursively while keeping your main context window clean.
+
+```
+You say:  "Analyze this 2MB log file for errors"
+Claude:    Uses RLM tools behind the scenes
+You get:  "Found 3 error patterns: database timeouts (47), auth failures (23)..."
+```
+
+You never call RLM tools directly. Claude reaches for them when it needs to.
+
+---
+
+## Why Not Just Read the File?
+
+| Approach | What Happens |
+|----------|-------------|
+| Paste 2MB into prompt | Context window overflow. Truncated results. High cost. |
+| Read first 2000 lines | Miss everything after line 2000. |
+| Summarize then query | Lossy compression. Details vanish. |
+| **RLM** | Full content stays external. Query any part. Sub-LLMs analyze chunks in parallel. Nothing lost. |
+
+The key insight from the [paper](https://arxiv.org/abs/2512.24601): **context is data, not prompt**. Treat it like a database, not a conversation.
+
+---
 
 ## Quick Start
 
-### Installation
+### Install
 
 ```bash
-git clone https://github.com/richardwhiteii/rlm.git
+git clone https://github.com/arkaigrowth/rlm.git
 cd rlm
 uv sync
 ```
 
-Or with pip:
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .
-```
+### Configure Claude Code
 
-### Configure for Claude Code
-
-First, find your installation path:
+Find your install path:
 ```bash
 cd rlm && pwd
-# Example output: /Users/your_username/projects/rlm
+# Example: /Users/you/projects/rlm
 ```
 
-Add to `~/.claude/.mcp.json`, replacing the example paths with your own:
-
+Add to `~/.claude/.mcp.json`:
 ```json
 {
   "mcpServers": {
     "rlm": {
       "command": "uv",
-      "args": ["run", "--directory", "/Users/your_username/projects/rlm", "python", "-m", "src.rlm_mcp_server"],
+      "args": ["run", "--directory", "/Users/you/projects/rlm", "python", "-m", "src.rlm_mcp_server"],
       "env": {
-        "RLM_DATA_DIR": "/Users/your_username/.rlm-data"
+        "RLM_DATA_DIR": "/Users/you/.rlm-data"
       }
     }
   }
 }
 ```
 
-> **Note**: Replace `/Users/your_username/projects/rlm` with the output from `pwd` above. The `RLM_DATA_DIR` is where RLM stores contexts and results — you can use any directory you prefer.
+> Replace paths with your actual `pwd` output. `RLM_DATA_DIR` is where contexts and results are stored.
 
-**Alternative** (if not using uv):
-```json
-{
-  "mcpServers": {
-    "rlm": {
-      "command": "/Users/your_username/projects/rlm/.venv/bin/python",
-      "args": ["-m", "src.rlm_mcp_server"],
-      "cwd": "/Users/your_username/projects/rlm",
-      "env": {
-        "RLM_DATA_DIR": "/Users/your_username/.rlm-data"
-      }
-    }
-  }
-}
+### Verify
+
+Ask Claude to analyze any large file. If RLM is connected, it will use the tools automatically.
+
+---
+
+## How It Works
+
+<details>
+<summary><strong>Architecture</strong></summary>
+
+```mermaid
+flowchart TB
+    CC["Claude Code<br/>(orchestrator)"] --> RLM["RLM MCP Server"]
+    RLM --> CS["Claude SDK<br/>Haiku 4.5"]
+    RLM --> OA["OpenAI<br/>gpt-4o-mini"]
+    RLM --> OR["OpenRouter<br/>multi-model"]
+    RLM --> OL["Ollama<br/>local / free"]
+
+    RLM --- CTX[("Contexts<br/>& Chunks")]
+    RLM --- RES[("Results<br/>Store")]
+
+    style CC fill:#1a1a2e,stroke:#e94560,color:#fff
+    style RLM fill:#16213e,stroke:#0f3460,color:#fff
+    style CS fill:#0f3460,stroke:#533483,color:#fff
+    style OA fill:#0f3460,stroke:#533483,color:#fff
+    style OR fill:#0f3460,stroke:#533483,color:#fff
+    style OL fill:#0f3460,stroke:#533483,color:#fff
 ```
 
-## Enable Auto-Detection
+</details>
 
-Enable Claude to use RLM tools automatically without manual invocation:
+<details>
+<summary><strong>Processing Pipeline</strong></summary>
 
-**1. CLAUDE.md Integration**
-Copy `CLAUDE.md.example` content to your project's `CLAUDE.md` (or `~/.claude/CLAUDE.md` for global) to teach Claude when to reach for RLM tools automatically.
+```mermaid
+flowchart LR
+    A["Load Context<br/>10M tokens"] --> B["Inspect<br/>structure"]
+    B --> C["Filter<br/>regex / lexical"]
+    C --> D["Chunk<br/>lines · chars · paragraphs"]
+    D --> E["Sub-Query<br/>parallel batch"]
+    E --> F["Store Results"]
+    F --> G{"Confident?"}
+    G -->|Yes| H["Aggregate<br/>& Return"]
+    G -->|"No — recurse"| D
 
-**2. Hook Installation**
-Copy the `.claude/hooks/` directory to your project to auto-suggest RLM when reading files >25KB:
-```bash
-cp -r .claude/hooks/ /Users/your_username/your-project/.claude/hooks/
+    style A fill:#e94560,stroke:#1a1a2e,color:#fff
+    style H fill:#2ecc71,stroke:#1a1a2e,color:#fff
 ```
-The hook provides guidance but doesn't block reads.
 
-**3. Skill Reference**
-Copy the `.claude/skills/` directory for comprehensive RLM guidance:
-```bash
-cp -r .claude/skills/ /Users/your_username/your-project/.claude/skills/
-```
+</details>
 
-With these in place, Claude will autonomously detect when to use RLM instead of reading large files directly into context.
+**The pattern is always the same:**
+
+1. **Load** — content becomes an external variable (stays out of your prompt)
+2. **Inspect** — understand structure without reading everything
+3. **Filter** — narrow the search space with regex before spending tokens
+4. **Chunk** — split strategically by lines, characters, or paragraphs
+5. **Sub-query** — ask focused questions of each chunk via sub-LLMs
+6. **Aggregate** — combine results, resolve conflicts, report gaps
+
+---
 
 ## Tools
 
-> These tools are used by Claude internally when processing large contexts. You don't call them directly—you just ask Claude to analyze large files.
+> These are used by Claude internally. You don't call them — you just ask Claude to analyze large files.
 
 | Tool | Purpose |
 |------|---------|
-| `rlm_auto_analyze` | **One-step analysis** — auto-detects type, chunks, and queries |
-| `rlm_load_context` | Load context as external variable |
+| `rlm_auto_analyze` | **One-step analysis** — detects type, chunks, queries automatically |
+| `rlm_load_context` | Load content as external variable |
 | `rlm_inspect_context` | Get structure info without loading into prompt |
-| `rlm_chunk_context` | Chunk by lines/chars/paragraphs |
-| `rlm_get_chunk` | Retrieve specific chunk |
-| `rlm_filter_context` | Filter with regex (keep/remove matching lines) |
-| `rlm_exec` | Execute Python code against loaded context (sandboxed) |
-| `rlm_sub_query` | Make sub-LLM call on chunk |
+| `rlm_chunk_context` | Split by lines, characters, or paragraphs |
+| `rlm_get_chunk` | Retrieve a specific chunk |
+| `rlm_filter_context` | Regex filtering (keep or remove matching lines) |
+| `rlm_exec` | Run Python against loaded context (sandboxed) |
+| `rlm_sub_query` | Sub-LLM call on a chunk |
 | `rlm_sub_query_batch` | Process multiple chunks in parallel |
-| `rlm_store_result` | Store sub-call result for aggregation |
+| `rlm_store_result` | Store results for aggregation |
 | `rlm_get_results` | Retrieve stored results |
 | `rlm_list_contexts` | List all loaded contexts |
 
-### Quick Analysis with `rlm_auto_analyze`
+### One-Step Analysis
 
-For most use cases, Claude uses `rlm_auto_analyze` — it handles everything automatically:
+For most use cases, `rlm_auto_analyze` handles everything:
 
 ```python
 rlm_auto_analyze(
@@ -134,262 +172,179 @@ rlm_auto_analyze(
 )
 ```
 
-**What it does automatically:**
-1. Detects content type (Python, JSON, Markdown, logs, prose, code)
-2. Selects optimal chunking strategy
-3. Adapts the query for the content type
-4. Runs parallel sub-queries
-5. Returns aggregated results
+It detects content type (Python, JSON, logs, prose), selects the right chunking strategy, adapts the query, runs parallel sub-queries, and returns aggregated results.
 
-**Supported goals:**
+### Programmatic Analysis
 
-| Goal | Description |
-|------|-------------|
-| `summarize` | Summarize content purpose and key points |
-| `find_bugs` | Identify errors, issues, potential problems |
-| `extract_structure` | List functions, classes, schema, headings |
-| `security_audit` | Find vulnerabilities and security issues |
-| `answer:<question>` | Answer a custom question about the content |
-
-### Programmatic Analysis with `rlm_exec`
-
-For deterministic pattern matching and data extraction, Claude can use `rlm_exec` to run Python code directly against a loaded context. This is closer to the paper's REPL approach and provides full control over analysis logic.
-
-**Tool**: `rlm_exec`
-
-**Purpose**: Execute arbitrary Python code against a loaded context in a sandboxed subprocess.
-
-**Parameters**:
-- `code` (required): Python code to execute. Set the `result` variable to capture output.
-- `context_name` (required): Name of a previously loaded context.
-- `timeout` (optional, default 30): Maximum execution time in seconds.
-
-**Features**:
-- Context available as read-only `context` variable
-- Pre-imported modules: `re`, `json`, `collections`
-- Subprocess isolation (won't crash the server)
-- Timeout enforcement
-- Works on any system with Python (no Docker needed)
-
-**Example — Finding patterns in a loaded context**:
+For deterministic extraction — regex, counting, parsing — `rlm_exec` runs Python directly against a loaded context:
 
 ```python
-# After loading a context
 rlm_exec(
     code="""
 import re
-amounts = re.findall(r'\$[\d,]+', context)
+amounts = re.findall(r'\\$[\\d,]+', context)
 result = {'count': len(amounts), 'sample': amounts[:5]}
 """,
     context_name="bill"
 )
 ```
 
-**Example Response**:
+Pre-imported: `re`, `json`, `collections`. Runs in a subprocess sandbox with timeout enforcement.
 
-```json
-{
-  "result": {
-    "count": 1247,
-    "sample": ["$500", "$1,000", "$250,000", "$100,000", "$50"]
-  },
-  "stdout": "",
-  "stderr": "",
-  "return_code": 0,
-  "timed_out": false
-}
-```
+**When to use which:**
 
-**Example — Extracting structured data**:
+| Task | Tool | Why |
+|------|------|-----|
+| Extract dates, IDs, amounts | `rlm_exec` | Regex is deterministic and fast |
+| Find security vulnerabilities | `rlm_sub_query` | Requires reasoning |
+| Parse JSON/XML structure | `rlm_exec` | Standard libraries work |
+| Summarize themes or tone | `rlm_sub_query` | Needs language understanding |
+| Count patterns | `rlm_exec` | Simple computation |
+| Answer "why did X happen?" | `rlm_sub_query` | Requires inference |
 
-```python
-rlm_exec(
-    code="""
-import re
-import json
-
-# Find all email addresses
-emails = re.findall(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', context)
-
-# Count by domain
-from collections import Counter
-domains = [e.split('@')[1] for e in emails]
-domain_counts = Counter(domains)
-
-result = {
-    'total_emails': len(emails),
-    'unique_domains': len(domain_counts),
-    'top_domains': domain_counts.most_common(5)
-}
-""",
-    context_name="dataset",
-    timeout=60
-)
-```
-
-**When to use `rlm_exec` vs `rlm_sub_query`**:
-
-| Use Case | Tool | Why |
-|----------|------|-----|
-| Extract all dates, IDs, amounts | `rlm_exec` | Regex is deterministic and fast |
-| Find security vulnerabilities | `rlm_sub_query` | Requires reasoning and context |
-| Parse JSON/XML structure | `rlm_exec` | Standard libraries work perfectly |
-| Summarize themes or tone | `rlm_sub_query` | Natural language understanding needed |
-| Count word frequencies | `rlm_exec` | Simple computation, no AI needed |
-| Answer "Why did X happen?" | `rlm_sub_query` | Requires inference and reasoning |
-
-**Tip**: For large contexts, combine both — use `rlm_exec` to filter/extract, then `rlm_sub_query` for semantic analysis of filtered results.
+---
 
 ## Providers
 
-By default, sub-queries use **Claude Haiku 4.5** via the Claude Agent SDK. This works out-of-the-box if you have a Claude API key configured.
+Sub-queries are processed by lightweight sub-LLMs. Pick the right one for your use case:
 
-| Provider | Default Model | Cost | Use Case |
-|----------|--------------|------|----------|
-| `claude-sdk` | claude-haiku-4-5 | ~$0.80/1M input | Default, works everywhere |
-| `ollama` | olmo-3.1:32b | $0 | Local inference, requires Ollama |
+| Provider | Default Model | Cost | Recursive Tool Calls | Best For |
+|----------|--------------|------|---------------------|----------|
+| `claude-sdk` | Haiku 4.5 | API | Limited | Default, simple analysis |
+| `openai` | gpt-4o-mini | API | Yes | Direct OpenAI, recursion |
+| `openrouter` | openai/gpt-4o-mini | API | Yes | Multi-model routing |
+| `ollama` | gemma3:27b | **Free** | Yes | Local inference, zero cost |
 
-## Recursive Sub-Queries
+### Recursive Sub-Queries
 
-The `rlm_sub_query` and `rlm_sub_query_batch` tools support hierarchical decomposition via the `max_depth` parameter:
+The `max_depth` parameter enables hierarchical decomposition:
 
-- `max_depth=0` (default): Flat call, no recursion
-- `max_depth=1-5`: Sub-LLM can use RLM tools (chunk, filter, sub_query, etc.)
-
-Example: Analyzing a massive codebase with 2-level recursion:
 ```python
 rlm_sub_query(
     query="Find all security vulnerabilities",
     context_name="codebase",
     chunk_index=0,
-    max_depth=2  # Allow sub-queries to further decompose
+    provider="ollama",
+    max_depth=1  # Sub-LLM gets RLM tools and can further decompose
 )
 ```
 
-**How it works:**
-1. When `max_depth > 0`, the sub-LLM receives RLM tools in its function calling context
-2. If the sub-LLM decides to use a tool (e.g., `rlm_chunk_context`), the agent loop handles it
-3. Each recursive call decrements the depth limit until `max_depth` is reached
-4. The response includes recursion metadata: `depth_reached` and `call_trace`
+When `max_depth > 0`, the sub-LLM receives RLM tools in its own context and can chunk, filter, and sub-query recursively. Each level decrements the depth until the limit is reached. Responses include recursion metadata: `depth_reached` and `call_trace`.
 
-**Recommended for recursive calls**: Use a local model like `gemma3:27b` via Ollama to avoid cost escalation from deep recursion.
+> Keep `max_depth` shallow (0 or 1). Deeper trees rarely improve results and can escalate costs.
 
-## Using Ollama (Free Local Inference)
+### Provider Setup
 
-With [Ollama](https://ollama.ai) installed locally, you can run sub-queries at zero cost:
+<details>
+<summary><strong>Ollama (free local inference)</strong></summary>
 
-1. **Install Ollama** and pull a model:
-   ```bash
-   ollama pull gemma3:27b
-   ```
-
-2. **Add Ollama URL** to your MCP config:
-   ```json
-   {
-     "mcpServers": {
-       "rlm": {
-         "command": "uv",
-         "args": ["run", "--directory", "/Users/your_username/projects/rlm", "python", "-m", "src.rlm_mcp_server"],
-         "env": {
-           "RLM_DATA_DIR": "/Users/your_username/.rlm-data",
-           "OLLAMA_URL": "http://localhost:11434"
-         }
-       }
-     }
-   }
-   ```
-
-3. **Specify provider** in sub-queries:
-   ```
-   rlm_sub_query(
-       query="Summarize this section",
-       context_name="my_doc",
-       chunk_index=0,
-       provider="ollama"  # Use local Ollama instead of default claude-sdk
-   )
-   ```
-
-Or for batch processing:
+```bash
+# Install Ollama and pull a model
+ollama pull gemma3:27b
 ```
+
+Add to your MCP config env:
+```json
+"env": {
+    "RLM_DATA_DIR": "/Users/you/.rlm-data",
+    "OLLAMA_URL": "http://localhost:11434"
+}
+```
+
+```python
 rlm_sub_query_batch(
     query="Extract key points",
     context_name="my_doc",
     chunk_indices=[0, 1, 2, 3],
-    provider="ollama",  # Use local Ollama instead of default claude-sdk
+    provider="ollama",
     concurrency=4
 )
 ```
 
-## Usage Examples
+</details>
 
-### Basic Pattern
+<details>
+<summary><strong>OpenAI (direct)</strong></summary>
 
+```bash
+export OPENAI_API_KEY="your_key"
 ```
-# 1. Load a large document
-rlm_load_context(name="report", content=<large document>)
-
-# 2. Inspect structure
-rlm_inspect_context(name="report", preview_chars=500)
-
-# 3. Chunk into manageable pieces
-rlm_chunk_context(name="report", strategy="paragraphs", size=1)
-
-# 4. Sub-query chunks in parallel
-rlm_sub_query_batch(
-    query="What is the main topic? Reply in one sentence.",
-    context_name="report",
-    chunk_indices=[0, 1, 2, 3],
-    concurrency=4  # uses claude-sdk by default
-)
-
-# 5. Store results for aggregation
-rlm_store_result(name="topics", result=<response>)
-
-# 6. Retrieve all results
-rlm_get_results(name="topics")
-```
-
-### Analyzing Encyclopedia Britannica (11MB)
-
-The flagship example of RLM capabilities — processing the Encyclopedia Britannica, 11th Edition from Project Gutenberg:
 
 ```python
-# Load the full encyclopedia (11MB, ~2M tokens)
+rlm_sub_query_batch(
+    query="Extract key findings",
+    context_name="my_doc",
+    chunk_indices=[0, 1, 2, 3],
+    provider="openai",
+    model="gpt-4o-mini",
+    max_depth=1
+)
+```
+
+</details>
+
+<details>
+<summary><strong>OpenRouter (multi-model)</strong></summary>
+
+```bash
+export OPENROUTER_API_KEY="your_key"
+```
+
+```python
+rlm_sub_query(
+    query="Find security issues",
+    context_name="codebase",
+    chunk_index=0,
+    provider="openrouter",
+    model="google/gemini-2.5-flash"  # or any OpenRouter model
+)
+```
+
+</details>
+
+---
+
+## Auto-Detection
+
+Teach Claude to reach for RLM tools automatically — no manual invocation needed.
+
+**1. CLAUDE.md Integration** — Copy `CLAUDE.md.example` to your project's `CLAUDE.md` (or `~/.claude/CLAUDE.md` for global).
+
+**2. Hook Installation** — Auto-suggests RLM when reading files >25KB:
+```bash
+cp -r .claude/hooks/ /path/to/your-project/.claude/hooks/
+```
+
+**3. Skill Reference** — Comprehensive operational guidance:
+```bash
+cp -r skills/ /path/to/your-project/skills/
+```
+
+The skill system includes **budgets, guardrails, query patterns, and fail-fast contracts** — production-grade controls for recursive analysis. See `skills/rlm/SKILL.md` for the full operational profile.
+
+---
+
+## Test Corpus
+
+The repository supports testing with the **Encyclopedia Britannica, 11th Edition** (1910–1911) from Project Gutenberg — 11MB, ~2M tokens.
+
+```bash
+# Download the test corpus
+./scripts/download-encyclopedia.sh
+```
+
+```python
 content = open("docs/encyclopedia/merged_encyclopedia.txt").read()
 rlm_load_context(name="encyclopedia", content=content)
-
-# Inspect
 rlm_inspect_context(name="encyclopedia")
 # → 11MB, 184K lines, ~2M tokens
 
-# Chunk for processing
 rlm_chunk_context(name="encyclopedia", strategy="paragraphs", size=30)
-
-# Query across the corpus
 rlm_sub_query_batch(
     query="Summarize the main topics in this section",
     context_name="encyclopedia",
     chunk_indices=[0, 50, 100, 150],
-    provider="claude-sdk"  # or "ollama" for free local inference
-)
-```
-
-**Extract Topic Catalog**:
-
-```python
-# Filter for specific subject
-rlm_filter_context(
-    name="encyclopedia",
-    output_name="botany",
-    pattern="(?i)(botan|plant|flora|flower|genus)",
-    mode="keep"
-)
-
-# Analyze filtered content
-rlm_auto_analyze(
-    name="botany_analysis",
-    content=filtered_content,
-    goal="answer:List all botanical articles with brief descriptions"
+    provider="ollama"  # Free
 )
 ```
 
@@ -398,165 +353,67 @@ rlm_auto_analyze(
 | File size | 11 MB |
 | Lines | 184,000 |
 | Tokens | ~2M |
-| Processing cost | $0 (Ollama) or ~$1.60 (Haiku) |
+| Cost | $0 (Ollama) or ~$1.60 (Haiku) |
+
+---
 
 ## Data Storage
 
 ```
 $RLM_DATA_DIR/
 ├── contexts/     # Raw contexts (.txt + .meta.json)
-├── chunks/       # Chunked versions (by context name)
+├── chunks/       # Chunked versions (cached by context)
 └── results/      # Stored sub-call results (.jsonl)
 ```
 
-Contexts persist across sessions. Chunked contexts are cached for reuse.
+Contexts persist across sessions. Chunked data is cached for reuse.
 
-## Architecture
+---
 
-```
-Claude Code
-    │
-    ▼
-RLM MCP Server
-    │
-    ├─► claude-sdk (Haiku 4.5) ─► Anthropic API
-    │
-    └─► ollama ─► Local LLM (gemma3:27b, llama3, etc.)
+## Contributing
+
+```bash
+git clone https://github.com/arkaigrowth/rlm.git
+cd rlm
+uv sync --dev
+pytest
 ```
 
-The key insight: **context stays external, not in your prompt**. Claude orchestrates; sub-models analyze.
-
-## For Contributors: Learning the Codebase
-
-Use these prompts with Claude Code to explore the codebase and learn RLM patterns. The code is the single source of truth.
-
-### Understanding the Tools
+Use Claude Code to explore the codebase:
 
 ```
-Read src/rlm_mcp_server.py and list all RLM tools with their parameters and purpose.
+Read src/rlm_mcp_server.py and list all RLM tools with their parameters.
 ```
 
 ```
-Explain the chunking strategies available in rlm_chunk_context.
-When would I use each one?
+How does the recursive sub-query system work? Walk me through _call_ollama.
 ```
 
 ```
-What's the difference between rlm_sub_query and rlm_sub_query_batch?
-Show me the implementation.
+How would I add a new provider (e.g., Gemini direct API)?
 ```
 
-### Understanding the Architecture
+---
 
-```
-Read src/rlm_mcp_server.py and explain how contexts are stored and persisted.
-Where does the data live?
-```
+## Credits
 
-```
-How does the claude-sdk provider extract text from responses?
-Walk me through _call_claude_sdk.
-```
+Built on [Richard White's RLM](https://github.com/richardwhiteii/rlm) — the first MCP server implementing recursive language model patterns.
 
-```
-What happens when I call rlm_load_context? Trace the full flow.
-```
+Based on research by **Tian Jin et al.** at MIT:
+> [Recursive Language Models](https://arxiv.org/abs/2512.24601) (2024) — Introduced the paradigm of treating LLM context as an external variable and using recursive sub-model calls for unbounded context processing.
 
-### Hands-On Learning
+Encyclopedia Britannica test corpus from [Project Gutenberg](https://www.gutenberg.org/). Public domain.
 
-```
-Load the README as a context, chunk it by paragraphs,
-and run a sub-query on the first chunk to summarize it.
-```
-
-```
-Show me how to process a large file in parallel using rlm_sub_query_batch.
-Use a real example.
-```
-
-```
-I have a 1MB log file. Walk me through the RLM pattern to extract all errors.
-```
-
-### Extending RLM
-
-```
-Read the test file and explain what scenarios are covered.
-What edge cases should I be aware of?
-```
-
-```
-How would I add a new chunking strategy (e.g., by regex delimiter)?
-Show me where to modify the code.
-```
-
-```
-How would I add a new provider (e.g., OpenAI)?
-What functions need to change?
-```
-
-## Test Corpus: Encyclopedia Britannica
-
-The repository includes excerpts from the **Encyclopedia Britannica, 11th Edition** (1910-1911) from Project Gutenberg for testing RLM capabilities on large reference documents.
-
-### Included Files
-
-| File | Size | Description |
-|------|------|-------------|
-| `docs/encyclopedia/merged_encyclopedia.txt` | 11MB | All slices merged (~2M tokens) |
-
-### Using for Testing
-
-```python
-# Load the full encyclopedia
-content = open("docs/encyclopedia/merged_encyclopedia.txt").read()
-rlm_load_context(name="encyclopedia", content=content)
-
-# Inspect
-rlm_inspect_context(name="encyclopedia")
-# → 11MB, 184K lines, ~2M tokens
-
-# Chunk for processing
-rlm_chunk_context(name="encyclopedia", strategy="paragraphs", size=30)
-
-# Query across the corpus
-rlm_sub_query_batch(
-    query="Summarize the main topics in this section",
-    context_name="encyclopedia",
-    chunk_indices=[0, 50, 100, 150],
-    provider="claude-sdk"  # or "ollama" for free local inference
-)
-```
-
-### Example: Extract Topic Catalog
-
-```python
-# Filter for specific subject
-rlm_filter_context(
-    name="encyclopedia",
-    output_name="botany",
-    pattern="(?i)(botan|plant|flora|flower|genus)",
-    mode="keep"
-)
-
-# Analyze filtered content
-rlm_auto_analyze(
-    name="botany_analysis",
-    content=filtered_content,
-    goal="answer:List all botanical articles with brief descriptions"
-)
-```
-
-### Download More Slices
-
-Additional encyclopedia volumes available from Project Gutenberg:
-- Search: https://www.gutenberg.org/ebooks/search/?query=encyclopaedia+britannica+11th
-- ~130 slices available covering A-Z
-
-### Attribution
-
-Encyclopedia Britannica, 11th Edition (1910-1911) sourced from [Project Gutenberg](https://www.gutenberg.org/). Public domain.
+---
 
 ## License
 
-MIT
+[MIT](LICENSE) — Use it, fork it, ship it.
+
+---
+
+<div align="center">
+
+**[arkaigrowth](https://github.com/arkaigrowth)** · [Report Issues](https://github.com/arkaigrowth/rlm/issues) · [Read the Paper](https://arxiv.org/abs/2512.24601)
+
+</div>
