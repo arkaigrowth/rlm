@@ -11,10 +11,10 @@ It stores data externally, chunks it, runs small sub-calls, and merges answers.
 
 | Provider | Key | Good For | Recursion |
 |---|---|---|---|
+| `openrouter` | `OPENROUTER_API_KEY` | **Recommended hosted default** | Yes |
 | `openai` | `OPENAI_API_KEY` | Hosted setup without OpenRouter | Yes |
-| `openrouter` | `OPENROUTER_API_KEY` | Multi-vendor routing | Yes |
-| `ollama` | none (local runtime) | Local/private/low cost | Yes |
-| `claude-sdk` | Claude SDK auth | Simple single-turn calls | Limited |
+| `ollama` | none (local runtime) | Local/private/zero cost | Yes |
+| `claude-sdk` | Claude SDK auth (auto) | Simple single-turn fallback only | **No** — fails fast if recursive tools requested |
 
 ## Recommended Defaults
 

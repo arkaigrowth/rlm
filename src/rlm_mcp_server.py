@@ -57,7 +57,7 @@ server = Server("rlm")
 # Default models per provider
 DEFAULT_MODELS = {
     "ollama": "olmo-3.1:32b",
-    "claude-sdk": "claude-haiku-4-5-20251101",
+    "claude-sdk": "claude-haiku-4-5-20251001",
     "openai": "gpt-5.4-mini",
     "openrouter": "openai/gpt-5.4-mini",  # Recommended hosted default
 }
@@ -400,7 +400,7 @@ async def _resolve_auto_provider_candidates(
         if provider == "ollama":
             model, _ = await _resolve_ollama_model(requested_model)
         else:
-            model = requested_model or DEFAULT_MODELS.get(provider, "claude-haiku-4-5-20251101")
+            model = requested_model or DEFAULT_MODELS.get(provider, "claude-haiku-4-5-20251001")
 
         candidates.append((provider, model))
 
@@ -582,17 +582,30 @@ async def _call_claude_sdk(
     tools: list[dict] | None = None,
     state: Optional["RecursionState"] = None,
 ) -> tuple[Optional[str], Optional[str], Optional["RecursionState"]]:
-    """Make a sub-call to Claude SDK.
+    """Make a sub-call to Claude SDK (single-turn only).
 
     Returns (result, error, updated_state).
-    Note: Tool handling in Claude SDK is simplified (max_turns=1) for now.
+
+    Recursive tool-calling is NOT supported via claude-sdk because each call
+    spawns a full Claude Code CLI subprocess.  This makes it 10-100x slower
+    and far more expensive than OpenRouter/Ollama API calls.  Use
+    provider="openrouter" or provider="ollama" for recursive work.
     """
     if not HAS_CLAUDE_SDK:
         return None, "claude-agent-sdk required for claude-sdk provider", state
 
+    # Fail fast if caller expects recursion
+    if tools and state and state.max_depth > 0:
+        return (
+            None,
+            "claude-sdk does not support recursive tool-calling. "
+            "Use provider='openrouter' or 'ollama' for recursive sub-queries.",
+            state,
+        )
+
     try:
         prompt = f"{query}\n\nContext:\n{context_content}"
-        options = ClaudeAgentOptions(max_turns=1)
+        options = ClaudeAgentOptions(max_turns=1, model=model or None)
 
         texts = []
         async for message in claude_query(prompt=prompt, options=options):
@@ -860,7 +873,12 @@ async def _make_provider_call(
 ) -> ProviderCallResult:
     """Route a sub-call to the appropriate provider, with auto fallback support."""
     if provider != "auto":
-        explicit_model = model or DEFAULT_MODELS.get(provider, "claude-haiku-4-5-20251101")
+        # Ollama handles its own model resolution (probing installed models),
+        # so don't pre-fill a default that may not be installed.
+        if provider == "ollama":
+            explicit_model = model  # let _resolve_ollama_model handle None
+        else:
+            explicit_model = model or DEFAULT_MODELS.get(provider, "claude-haiku-4-5-20251001")
         return await _call_explicit_provider(provider, explicit_model, query, context_content, tools, state)
 
     candidates, statuses = await _resolve_auto_provider_candidates(model, tools, state)

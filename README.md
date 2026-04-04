@@ -53,33 +53,68 @@ cd rlm
 uv sync
 ```
 
-### Configure Claude Code
+### Setup (Recommended)
 
-Find your install path:
+The setup script configures Claude Code, Claude Desktop, or both in one step:
+
 ```bash
-cd rlm && pwd
-# Example: /Users/you/projects/rlm
+./scripts/setup.sh --all      # both Claude Code and Claude Desktop
+./scripts/setup.sh --code     # Claude Code only
+./scripts/setup.sh --desktop  # Claude Desktop only
+./scripts/setup.sh --check    # show current status
 ```
 
-Add to `~/.claude/.mcp.json`:
+The script:
+- Adds the RLM MCP server entry to each platform's config
+- Symlinks the skill to `~/.claude/skills/rlm` (prevents drift between global skill and repo)
+- Ensures `run_rlm.sh` is executable and the venv is ready
+
+### Manual Configuration
+
+<details>
+<summary><strong>Claude Code</strong></summary>
+
+The setup script adds this to `~/.claude/settings.json`:
+
 ```json
 {
   "mcpServers": {
     "rlm": {
-      "command": "uv",
-      "args": ["run", "--directory", "/Users/you/projects/rlm", "python", "-m", "src.rlm_mcp_server"],
-      "env": {
-        "RLM_DATA_DIR": "/Users/you/.rlm-data"
-      }
+      "command": "/path/to/rlm/run_rlm.sh",
+      "args": []
     }
   }
 }
 ```
 
-> Replace paths with your actual `pwd` output. `RLM_DATA_DIR` is where contexts and results are stored.
-> If you launch via `run_rlm.sh`, the wrapper will prefer the shared helper at `${XDG_DATA_HOME:-$HOME/.local/share}/agent-tools/keychain_env.sh`, then fall back to the repo copy at `scripts/lib/keychain_env.sh`.
-> The wrapper will then try to load `OPENROUTER_API_KEY` from the macOS Keychain item `rlm-openrouter` first, then `openclaw-openrouter`, and only fall back to an already-exported environment variable if neither Keychain item exists.
-> Refresh the shared helper install after updates with `scripts/sync_shared_keychain_helper.sh`.
+Or add it manually with the CLI:
+```bash
+claude mcp add rlm /path/to/rlm/run_rlm.sh
+```
+
+</details>
+
+<details>
+<summary><strong>Claude Desktop</strong></summary>
+
+The setup script adds this to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "rlm": {
+      "command": "/path/to/rlm/run_rlm.sh",
+      "args": []
+    }
+  }
+}
+```
+
+Restart Claude Desktop after adding.
+
+</details>
+
+> `run_rlm.sh` handles API key loading via macOS Keychain (items `rlm-openrouter` or `openclaw-openrouter`), falling back to environment variables. See `docs/keychain-env-contract.md` for details.
 
 ### Verify
 
@@ -213,12 +248,12 @@ Sub-queries are processed by lightweight sub-LLMs. Pick the right one for your u
 
 | Provider | Default Model | Cost | Recursive Tool Calls | Best For |
 |----------|--------------|------|---------------------|----------|
-| `claude-sdk` | Haiku 4.5 | SDK auth | Limited | Last-resort single-turn fallback |
+| `openrouter` | openai/gpt-5.4-mini | API | **Yes** | **Recommended hosted default** |
 | `openai` | gpt-5.4-mini | API | Yes | Direct OpenAI, recursion |
-| `openrouter` | openai/gpt-5.4-mini | API | Yes | Recommended hosted default |
-| `ollama` | gemma3:27b | **Free** | Yes | Local inference, zero cost |
+| `ollama` | auto-detected | **Free** | Yes | Local inference, zero cost |
+| `claude-sdk` | Haiku 4.5 | Subscription | **No** — single-turn only | Last-resort fallback when no API keys available |
 
-`provider="auto"` now prefers `openrouter`, then `ollama`, then `openai`, and only falls back to `claude-sdk` for non-recursive single-turn work.
+`provider="auto"` prefers `openrouter`, then `ollama`, then `openai` for both simple and recursive calls. `claude-sdk` is only used as a last-resort fallback for non-recursive single-turn work — it does **not** support recursive tool-calling (each call spawns a full CLI subprocess, making it too slow and expensive for recursion).
 
 ### Recursive Sub-Queries
 

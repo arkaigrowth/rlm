@@ -2,6 +2,33 @@
 
 > Fork of [richardwhiteii/rlm](https://github.com/richardwhiteii/rlm) for arkai integration
 
+## 2026-04-04: Claude SDK Hardening + Ollama Bug Fix
+
+### Fixed
+- **Ollama model resolution bug**: `_make_provider_call` no longer pre-fills the
+  default model for Ollama.  Previously, `olmo-3.1:32b` was passed even when not
+  installed, bypassing the probe-and-fallback logic in `_resolve_ollama_model`.
+- **Claude SDK model passthrough**: `_call_claude_sdk` now passes the requested
+  `model` to `ClaudeAgentOptions` instead of always using the SDK default.
+
+### Added
+- **Setup script** (`scripts/setup.sh`): One-step configuration for Claude Code
+  and/or Claude Desktop. Handles MCP server registration, skill symlinking, and
+  dependency verification. Run `./scripts/setup.sh --check` to audit current state.
+- **Claude Desktop support**: RLM now works in Claude Desktop via the same
+  `run_rlm.sh` wrapper. Setup script manages both config files.
+
+### Changed
+- **Claude SDK fails fast on recursive requests**: If `tools` and `max_depth > 0`
+  are passed to `claude-sdk`, it immediately returns an actionable error instead of
+  silently degrading to a non-recursive call.
+- **Skill drift prevention**: Global skill at `~/.claude/skills/rlm/` is now a
+  symlink to `skills/rlm/` in this repo.  No more stale copies.
+- **Docs clarified**: README and team-guide now state explicitly that `claude-sdk`
+  does **not** support recursive tool-calling (each call spawns a CLI subprocess).
+- **README rewritten**: Quick Start now covers both Claude Code and Claude Desktop
+  with `scripts/setup.sh` as the primary install path.
+
 ## 2026-01-18: OpenRouter Provider + arkai Integration
 
 ### Added
