@@ -13,6 +13,7 @@ Apply this workflow with the RLM MCP tools:
 - `rlm_inspect_context`
 - `rlm_chunk_context`
 - `rlm_filter_context`
+- `rlm_provider_status`
 - `rlm_sub_query`
 - `rlm_sub_query_batch`
 - `rlm_exec`
@@ -43,6 +44,7 @@ If invoked directly, treat `$ARGUMENTS` as the explicit target and/or question t
 
 Use this default profile unless the user asks for a different tradeoff:
 - Prefer breadth-first decomposition over deep recursion.
+- Leave `provider` unset unless there is a good reason to force one.
 - Start with `max_depth=0`.
 - Raise to `max_depth=1` only after first-pass uncertainty.
 - Treat `max_depth=2` as an emergency ceiling.
@@ -57,6 +59,7 @@ Before the first semantic sub-call:
 - Set explicit budgets for depth, total sub-calls, chunk count, concurrency, and time.
 - State which context or file set is being externalized.
 - State the fallback path if MCP tools fail or are unavailable.
+- If provider setup is unclear, run `rlm_provider_status` before the first semantic call.
 
 Abort early and fall back when any of the following are true:
 - The task is already small enough for direct inspection.

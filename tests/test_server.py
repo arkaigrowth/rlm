@@ -16,6 +16,8 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from rlm_mcp_server import (
+    DEFAULT_MODELS,
+    ProviderCallResult,
     _chunk_content,
     _error_response,
     _get_rlm_tools_for_subcall,
@@ -26,6 +28,8 @@ from rlm_mcp_server import (
     _handle_inspect_context,
     _handle_list_contexts,
     _handle_load_context,
+    _handle_provider_status,
+    _resolve_auto_provider_candidates,
     _handle_store_result,
     _handle_sub_query,
     _handle_sub_query_batch,
@@ -388,7 +392,13 @@ class TestSubQuery:
         await _handle_load_context({"name": "query_test", "content": "test content"})
 
         with patch("rlm_mcp_server._make_provider_call", new_callable=AsyncMock) as mock:
-            mock.return_value = ("mocked response", None, None)  # result, error, state
+            mock.return_value = ProviderCallResult(
+                result="mocked response",
+                error=None,
+                state=None,
+                provider="ollama",
+                model="qwen2.5:32b",
+            )
 
             result = await _handle_sub_query({
                 "query": "what is this?",
@@ -398,6 +408,7 @@ class TestSubQuery:
             parsed = json.loads(result[0].text)
 
             assert parsed["response"] == "mocked response"
+            assert parsed["resolved_provider"] == "ollama"
             mock.assert_called_once()
 
 
@@ -463,7 +474,13 @@ class TestSubQueryBatch:
         })
 
         with patch("rlm_mcp_server._make_provider_call", new_callable=AsyncMock) as mock:
-            mock.return_value = ("response", None, None)  # result, error, state
+            mock.return_value = ProviderCallResult(
+                result="response",
+                error=None,
+                state=None,
+                provider="ollama",
+                model="qwen2.5:32b",
+            )
 
             result = await _handle_sub_query_batch({
                 "query": "analyze",
@@ -478,6 +495,75 @@ class TestSubQueryBatch:
             assert parsed["successful"] == 3
             assert parsed["failed"] == 0
             assert mock.call_count == 3
+
+
+class TestProviderSelection:
+    """Tests for provider preflight and auto-selection behavior."""
+
+    def test_hosted_defaults_use_gpt_5_4_mini(self):
+        """Hosted providers should default to the GPT-5.4 mini family."""
+        assert DEFAULT_MODELS["openai"] == "gpt-5.4-mini"
+        assert DEFAULT_MODELS["openrouter"] == "openai/gpt-5.4-mini"
+
+    @pytest.mark.asyncio
+    async def test_provider_status_reports_availability(self):
+        """Provider status should expose per-provider setup and recommendations."""
+        with patch("rlm_mcp_server._collect_provider_status", new_callable=AsyncMock) as mock:
+            mock.return_value = {
+                "claude-sdk": {"available": True, "reason": "ready", "recursive_tool_calls": False},
+                "ollama": {"available": True, "reason": "2 model(s) available", "recursive_tool_calls": True, "models": ["qwen2.5:32b"]},
+                "openrouter": {"available": False, "reason": "OPENROUTER_API_KEY environment variable not set", "recursive_tool_calls": True},
+                "openai": {"available": False, "reason": "OPENAI_API_KEY environment variable not set", "recursive_tool_calls": True},
+            }
+            result = await _handle_provider_status({"include_models": True})
+            parsed = json.loads(result[0].text)
+
+            assert parsed["default_provider"] in {"auto", "claude-sdk", "ollama", "openrouter", "openai"}
+            assert parsed["recommended_simple"] == "ollama"
+            assert parsed["recommended_recursive"] == "ollama"
+            assert parsed["providers"]["ollama"]["models"] == ["qwen2.5:32b"]
+
+    @pytest.mark.asyncio
+    async def test_auto_prefers_openrouter_before_ollama_when_available(self):
+        """Auto mode should prefer hosted OpenRouter before local fallbacks."""
+        with patch("rlm_mcp_server._collect_provider_status", new_callable=AsyncMock) as mock_status:
+            with patch("rlm_mcp_server._resolve_ollama_model", new_callable=AsyncMock) as mock_ollama:
+                mock_status.return_value = {
+                    "openrouter": {"available": True, "reason": "ready", "recursive_tool_calls": True},
+                    "ollama": {"available": True, "reason": "1 model(s) available", "recursive_tool_calls": True},
+                    "openai": {"available": True, "reason": "ready", "recursive_tool_calls": True},
+                    "claude-sdk": {"available": True, "reason": "ready", "recursive_tool_calls": False},
+                }
+                mock_ollama.return_value = ("qwen2.5:32b", None)
+
+                candidates, _ = await _resolve_auto_provider_candidates(None, None, None)
+
+                assert candidates[0] == ("openrouter", "openai/gpt-5.4-mini")
+                assert candidates[1] == ("ollama", "qwen2.5:32b")
+
+    @pytest.mark.asyncio
+    async def test_sub_query_defaults_to_auto_provider(self):
+        """Sub-query should default to the configured auto provider when omitted."""
+        await _handle_load_context({"name": "auto_query", "content": "test content"})
+
+        with patch("rlm_mcp_server._make_provider_call", new_callable=AsyncMock) as mock:
+            mock.return_value = ProviderCallResult(
+                result="auto response",
+                error=None,
+                state=None,
+                provider="ollama",
+                model="qwen2.5:32b",
+            )
+
+            result = await _handle_sub_query({
+                "query": "what is this?",
+                "context_name": "auto_query",
+            })
+            parsed = json.loads(result[0].text)
+
+            assert parsed["provider"] == "auto"
+            assert parsed["resolved_provider"] == "ollama"
+            mock.assert_called_once()
 
 
 class TestRecursionState:

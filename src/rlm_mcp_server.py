@@ -58,7 +58,8 @@ server = Server("rlm")
 DEFAULT_MODELS = {
     "ollama": "olmo-3.1:32b",
     "claude-sdk": "claude-haiku-4-5-20251101",
-    "openrouter": "openai/gpt-4o-mini",  # Cheapest capable model
+    "openai": "gpt-5.4-mini",
+    "openrouter": "openai/gpt-5.4-mini",  # Recommended hosted default
 }
 
 # ============================================================================
@@ -154,6 +155,52 @@ class RecursionState:
         )
 
 
+@dataclass
+class ProviderCallResult:
+    """Structured provider call result with resolved backend metadata."""
+    result: Optional[str]
+    error: Optional[str]
+    state: Optional["RecursionState"]
+    provider: str
+    model: str
+
+
+def _bound_recursive_tool_args(
+    tool_name: str,
+    tool_args: dict[str, Any],
+    state: Optional["RecursionState"],
+) -> dict[str, Any]:
+    """Bound recursive tool arguments to remaining depth budget.
+
+    Prevent sub-model tool calls from requesting deeper recursion than the
+    current recursion state allows.
+    """
+    if not state:
+        return tool_args
+
+    bounded = dict(tool_args)
+
+    if tool_name in {"rlm_sub_query", "rlm_sub_query_batch"}:
+        requested_depth = bounded.get("max_depth", 0)
+        try:
+            requested_depth = int(requested_depth)
+        except (TypeError, ValueError):
+            requested_depth = 0
+
+        remaining_depth = max(0, state.max_depth - (state.current_depth + 1))
+        bounded["max_depth"] = min(max(requested_depth, 0), remaining_depth)
+
+    return bounded
+
+
+def _coerce_int(value: Any, default: int) -> int:
+    """Coerce a value to int, falling back to default on invalid input."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _hash_content(content: str) -> str:
     """Create short hash for content identification."""
     return hashlib.sha256(content.encode()).hexdigest()[:12]
@@ -221,10 +268,157 @@ def _context_summary(name: str, content: str, **extra: Any) -> dict:
 # Shared schema fragments for tool definitions
 PROVIDER_SCHEMA = {
     "type": "string",
-    "enum": ["ollama", "claude-sdk", "openrouter"],
-    "description": "LLM provider for sub-call",
-    "default": "claude-sdk",
+    "enum": ["auto", "ollama", "claude-sdk", "openai", "openrouter"],
+    "description": "LLM provider for sub-call. Use auto to pick the best available backend.",
+    "default": "auto",
 }
+
+AUTO_PROVIDER_ORDER_SIMPLE = ("openrouter", "ollama", "openai", "claude-sdk")
+AUTO_PROVIDER_ORDER_RECURSIVE = ("openrouter", "ollama", "openai")
+PREFERRED_OLLAMA_MODELS = (
+    "olmo-3.1:32b",
+    "qwen2.5:32b",
+    "qwen2.5:32b-instruct",
+    "gemma3:27b",
+    "qwen2.5:latest",
+    "llama3.3:70b",
+    "llama3:latest",
+    "llama3.2:latest",
+)
+
+
+def _default_provider() -> str:
+    """Return the configured default provider, falling back to auto."""
+    provider = os.environ.get("RLM_DEFAULT_PROVIDER", "auto")
+    if provider in PROVIDER_SCHEMA["enum"]:
+        return provider
+    return "auto"
+
+
+def _provider_supports_recursive_tools(provider: str) -> bool:
+    """Whether a provider can currently handle recursive tool loops."""
+    return provider in {"ollama", "openai", "openrouter"}
+
+
+async def _probe_ollama_models() -> tuple[list[str], Optional[str]]:
+    """Return locally available Ollama models, or an error string."""
+    if not HAS_HTTPX:
+        return [], "httpx required for Ollama calls"
+
+    ollama_url = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            response = await client.get(f"{ollama_url}/api/tags")
+            response.raise_for_status()
+            payload = response.json()
+    except Exception as e:
+        return [], str(e)
+
+    models = payload.get("models", [])
+    names = [m.get("name") for m in models if m.get("name")]
+    return names, None
+
+
+async def _collect_provider_status(include_models: bool = False) -> dict[str, dict[str, Any]]:
+    """Collect availability and setup status for each provider."""
+    statuses: dict[str, dict[str, Any]] = {
+        "claude-sdk": {
+            "available": HAS_CLAUDE_SDK,
+            "reason": "claude-agent-sdk import available" if HAS_CLAUDE_SDK else "claude-agent-sdk package missing",
+            "recursive_tool_calls": _provider_supports_recursive_tools("claude-sdk"),
+        },
+        "openai": {
+            "available": HAS_OPENAI and bool(os.environ.get("OPENAI_API_KEY")),
+            "reason": (
+                "OPENAI_API_KEY configured"
+                if HAS_OPENAI and os.environ.get("OPENAI_API_KEY")
+                else ("OPENAI_API_KEY environment variable not set" if HAS_OPENAI else "openai package missing")
+            ),
+            "recursive_tool_calls": _provider_supports_recursive_tools("openai"),
+        },
+        "openrouter": {
+            "available": HAS_OPENAI and bool(os.environ.get("OPENROUTER_API_KEY")),
+            "reason": (
+                "OPENROUTER_API_KEY configured"
+                if HAS_OPENAI and os.environ.get("OPENROUTER_API_KEY")
+                else ("OPENROUTER_API_KEY environment variable not set" if HAS_OPENAI else "openai package missing")
+            ),
+            "recursive_tool_calls": _provider_supports_recursive_tools("openrouter"),
+        },
+    }
+
+    ollama_models, ollama_error = await _probe_ollama_models()
+    statuses["ollama"] = {
+        "available": bool(ollama_models),
+        "reason": f"{len(ollama_models)} model(s) available" if ollama_models else (ollama_error or "no Ollama models found"),
+        "recursive_tool_calls": _provider_supports_recursive_tools("ollama"),
+    }
+    if include_models:
+        statuses["ollama"]["models"] = ollama_models
+
+    return statuses
+
+
+async def _resolve_ollama_model(requested_model: str | None) -> tuple[str, Optional[str]]:
+    """Resolve a usable Ollama model without assuming the default is installed."""
+    if requested_model:
+        return requested_model, None
+
+    models, error = await _probe_ollama_models()
+    if not models:
+        return DEFAULT_MODELS["ollama"], error or "no Ollama models available"
+
+    preferred_override = os.environ.get("RLM_OLLAMA_MODEL")
+    if preferred_override and preferred_override in models:
+        return preferred_override, None
+
+    for candidate in PREFERRED_OLLAMA_MODELS:
+        if candidate in models:
+            return candidate, None
+
+    return models[0], None
+
+
+async def _resolve_auto_provider_candidates(
+    requested_model: str | None,
+    tools: list[dict] | None,
+    state: Optional["RecursionState"],
+) -> tuple[list[tuple[str, str]], dict[str, dict[str, Any]]]:
+    """Return candidate providers/models for auto mode, in preference order."""
+    recursive = bool(tools and state)
+    order = AUTO_PROVIDER_ORDER_RECURSIVE if recursive else AUTO_PROVIDER_ORDER_SIMPLE
+    statuses = await _collect_provider_status(include_models=True)
+    candidates: list[tuple[str, str]] = []
+
+    for provider in order:
+        status = statuses.get(provider, {})
+        if not status.get("available"):
+            continue
+        if recursive and not status.get("recursive_tool_calls", _provider_supports_recursive_tools(provider)):
+            continue
+
+        if provider == "ollama":
+            model, _ = await _resolve_ollama_model(requested_model)
+        else:
+            model = requested_model or DEFAULT_MODELS.get(provider, "claude-haiku-4-5-20251101")
+
+        candidates.append((provider, model))
+
+    return candidates, statuses
+
+
+def _format_auto_provider_error(statuses: dict[str, dict[str, Any]], attempted: list[str]) -> str:
+    """Format an actionable auto-provider failure message."""
+    availability = "; ".join(
+        f"{provider}: {info.get('reason', 'unavailable')}"
+        for provider, info in statuses.items()
+    )
+    attempted_summary = ", ".join(attempted) if attempted else "none"
+    return (
+        "auto provider could not find a usable backend. "
+        f"Attempted: {attempted_summary}. "
+        f"Status: {availability}"
+    )
 
 
 
@@ -297,9 +491,10 @@ async def _handle_ollama_tool_calls(
                 # Descend recursion state for the tool call
                 call_id = f"{tool_name}:{iteration}"
                 child_state = current_state.descend(call_id)
+                bounded_args = _bound_recursive_tool_args(tool_name, tool_args, current_state)
 
                 try:
-                    tool_result = await handler(tool_args)
+                    tool_result = await handler(bounded_args)
                     result_text = tool_result[0].text if tool_result else ""
                 except Exception as e:
                     result_text = json.dumps({"error": str(e)})
@@ -426,70 +621,164 @@ async def _call_openrouter(
     tools: list[dict] | None = None,
     state: Optional["RecursionState"] = None,
 ) -> tuple[Optional[str], Optional[str], Optional["RecursionState"]]:
-    """Make a sub-call via OpenRouter API (OpenAI-compatible).
+    """Make a sub-call via OpenRouter API (OpenAI-compatible)."""
+    return await _call_openai_compatible(
+        query=query,
+        context_content=context_content,
+        model=model,
+        tools=tools,
+        state=state,
+        provider_label="openrouter",
+        api_key_env="OPENROUTER_API_KEY",
+        base_url="https://openrouter.ai/api/v1",
+        extra_headers={
+            "HTTP-Referer": "https://github.com/alexkamysz/rlm-fork",
+            "X-Title": "rlm-fork",
+        },
+    )
 
-    Supports: openai/*, google/*, z-ai/*, anthropic/* (routed through OpenRouter)
-    Tool calls: YES (via standard function calling format)
 
-    Returns (result, error, updated_state).
-    """
+async def _call_openai_api(
+    query: str,
+    context_content: str,
+    model: str,
+    tools: list[dict] | None = None,
+    state: Optional["RecursionState"] = None,
+) -> tuple[Optional[str], Optional[str], Optional["RecursionState"]]:
+    """Make a sub-call directly to OpenAI (no OpenRouter required)."""
+    return await _call_openai_compatible(
+        query=query,
+        context_content=context_content,
+        model=model,
+        tools=tools,
+        state=state,
+        provider_label="openai",
+        api_key_env="OPENAI_API_KEY",
+    )
+
+
+async def _call_openai_compatible(
+    query: str,
+    context_content: str,
+    model: str,
+    tools: list[dict] | None,
+    state: Optional["RecursionState"],
+    provider_label: str,
+    api_key_env: str,
+    base_url: str | None = None,
+    extra_headers: dict[str, str] | None = None,
+    max_iterations: int = 5,
+) -> tuple[Optional[str], Optional[str], Optional["RecursionState"]]:
+    """Run an OpenAI-compatible tool-calling loop for recursion-safe sub-queries."""
     if not HAS_OPENAI:
-        return None, "openai package required for openrouter provider (pip install openai)", state
+        return None, f"openai package required for {provider_label} provider (pip install openai)", state
 
-    api_key = os.environ.get("OPENROUTER_API_KEY")
+    api_key = os.environ.get(api_key_env)
     if not api_key:
-        return None, "OPENROUTER_API_KEY environment variable not set", state
+        return None, f"{api_key_env} environment variable not set", state
 
     try:
-        client = openai.OpenAI(
-            base_url="https://openrouter.ai/api/v1",
-            api_key=api_key,
-        )
+        client_kwargs: dict[str, Any] = {"api_key": api_key}
+        if base_url:
+            client_kwargs["base_url"] = base_url
+        client = openai.AsyncOpenAI(**client_kwargs)
 
-        messages = [
+        messages: list[dict[str, Any]] = [
             {"role": "system", "content": f"Context:\n{context_content}"},
             {"role": "user", "content": query},
         ]
 
-        kwargs: dict[str, Any] = {
-            "model": model,
-            "messages": messages,
-            "max_tokens": 4096,
-            "temperature": 0.7,
-            "extra_headers": {
-                "HTTP-Referer": "https://github.com/arkaigrowth/arkai",
-                "X-Title": "arkai RLM",
-            },
-        }
+        current_state = state
+        latest_content = ""
 
-        # Add tools if provided (enables agentic behavior)
-        if tools:
-            kwargs["tools"] = tools
-            kwargs["tool_choice"] = "auto"
+        for iteration in range(max_iterations):
+            kwargs: dict[str, Any] = {
+                "model": model,
+                "messages": messages,
+                "max_tokens": 4096,
+                "temperature": 0.2,
+            }
+            if extra_headers:
+                kwargs["extra_headers"] = extra_headers
 
-        response = client.chat.completions.create(**kwargs)
+            can_recurse = bool(tools and current_state and current_state.can_recurse())
+            if can_recurse:
+                kwargs["tools"] = tools
+                kwargs["tool_choice"] = "auto"
 
-        message = response.choices[0].message
-        result = message.content or ""
+            response = await client.chat.completions.create(**kwargs)
+            message = response.choices[0].message
+            content = message.content or ""
+            if content:
+                latest_content = content
 
-        # Handle tool_calls if model invokes tools
-        if tools and message.tool_calls:
-            # For now, return a structured response indicating tool calls
-            # Future: implement tool execution loop like steelman
-            tool_info = [
-                {"name": tc.function.name, "arguments": tc.function.arguments}
-                for tc in message.tool_calls
-            ]
-            result = json.dumps({
-                "text": result,
-                "tool_calls": tool_info,
-                "note": "Tool calls requested but not executed (RLM doesn't auto-execute)"
-            })
+            tool_calls = message.tool_calls or []
+            if not tool_calls:
+                return latest_content, None, current_state
 
-        return result, None, state
+            if not can_recurse:
+                # Model requested tools after recursion was disabled/budget-exhausted.
+                return latest_content, "recursion_budget_exhausted", current_state
+
+            assistant_message: dict[str, Any] = {
+                "role": "assistant",
+                "content": content or "",
+                "tool_calls": [],
+            }
+            for tool_call in tool_calls:
+                assistant_message["tool_calls"].append({
+                    "id": tool_call.id,
+                    "type": "function",
+                    "function": {
+                        "name": tool_call.function.name,
+                        "arguments": tool_call.function.arguments or "{}",
+                    },
+                })
+            messages.append(assistant_message)
+
+            for tool_call in tool_calls:
+                tool_name = tool_call.function.name
+                tool_args_raw = tool_call.function.arguments or "{}"
+                tool_args: dict[str, Any]
+
+                if isinstance(tool_args_raw, str):
+                    try:
+                        parsed = json.loads(tool_args_raw)
+                        tool_args = parsed if isinstance(parsed, dict) else {}
+                    except json.JSONDecodeError:
+                        tool_args = {}
+                elif isinstance(tool_args_raw, dict):
+                    tool_args = tool_args_raw
+                else:
+                    tool_args = {}
+
+                handler = TOOL_HANDLERS.get(tool_name)
+                if handler:
+                    call_id = f"{tool_name}:{iteration}"
+                    child_state = current_state.descend(call_id) if current_state else None
+                    bounded_args = _bound_recursive_tool_args(tool_name, tool_args, current_state)
+
+                    try:
+                        tool_result = await handler(bounded_args)
+                        result_text = tool_result[0].text if tool_result else ""
+                    except Exception as e:
+                        result_text = json.dumps({"error": str(e)})
+
+                    if child_state:
+                        current_state = child_state
+                else:
+                    result_text = json.dumps({"error": f"Unknown tool: {tool_name}"})
+
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": result_text,
+                })
+
+        return latest_content, "max_iterations_reached", current_state
 
     except Exception as e:
-        return None, f"OpenRouter error: {str(e)}", state
+        return None, f"{provider_label} error: {str(e)}", state
 
 
 def _get_rlm_tools_for_subcall() -> list[dict]:
@@ -523,27 +812,94 @@ def _get_rlm_tools_for_subcall() -> list[dict]:
     ]
 
 
-async def _make_provider_call(
+async def _call_explicit_provider(
     provider: str,
     model: str,
     query: str,
     context_content: str,
     tools: list[dict] | None = None,
     state: Optional["RecursionState"] = None,
-) -> tuple[Optional[str], Optional[str], Optional["RecursionState"]]:
+) -> ProviderCallResult:
     """Route a sub-call to the appropriate provider.
 
     Returns (result, error, updated_state).
     When tools and state are provided, enables recursive tool calling.
     """
     if provider == "ollama":
-        return await _call_ollama(query, context_content, model, tools, state)
+        resolved_model, model_error = await _resolve_ollama_model(model)
+        if model_error and not model:
+            return ProviderCallResult(None, model_error, state, provider, resolved_model)
+        result, error, updated_state = await _call_ollama(query, context_content, resolved_model, tools, state)
+        return ProviderCallResult(result, error, updated_state, provider, resolved_model)
     elif provider == "claude-sdk":
-        return await _call_claude_sdk(query, context_content, model, tools, state)
+        result, error, updated_state = await _call_claude_sdk(query, context_content, model, tools, state)
+        return ProviderCallResult(result, error, updated_state, provider, model)
+    elif provider == "openai":
+        result, error, updated_state = await _call_openai_api(query, context_content, model, tools, state)
+        return ProviderCallResult(result, error, updated_state, provider, model)
     elif provider == "openrouter":
-        return await _call_openrouter(query, context_content, model, tools, state)
+        result, error, updated_state = await _call_openrouter(query, context_content, model, tools, state)
+        return ProviderCallResult(result, error, updated_state, provider, model)
     else:
-        return None, f"Unknown provider: {provider}. Supported: ollama, claude-sdk, openrouter", state
+        return ProviderCallResult(
+            None,
+            f"Unknown provider: {provider}. Supported: auto, ollama, claude-sdk, openai, openrouter",
+            state,
+            provider,
+            model,
+        )
+
+
+async def _make_provider_call(
+    provider: str,
+    model: str | None,
+    query: str,
+    context_content: str,
+    tools: list[dict] | None = None,
+    state: Optional["RecursionState"] = None,
+) -> ProviderCallResult:
+    """Route a sub-call to the appropriate provider, with auto fallback support."""
+    if provider != "auto":
+        explicit_model = model or DEFAULT_MODELS.get(provider, "claude-haiku-4-5-20251101")
+        return await _call_explicit_provider(provider, explicit_model, query, context_content, tools, state)
+
+    candidates, statuses = await _resolve_auto_provider_candidates(model, tools, state)
+    attempted: list[str] = []
+
+    if not candidates:
+        return ProviderCallResult(
+            None,
+            _format_auto_provider_error(statuses, attempted),
+            state,
+            "auto",
+            model or "",
+        )
+
+    last_error: Optional[str] = None
+    current_state = state
+    for candidate_provider, candidate_model in candidates:
+        attempted.append(f"{candidate_provider}:{candidate_model}")
+        call_result = await _call_explicit_provider(
+            candidate_provider,
+            candidate_model,
+            query,
+            context_content,
+            tools,
+            current_state,
+        )
+        if not call_result.error:
+            return call_result
+
+        last_error = f"{candidate_provider}: {call_result.error}"
+        current_state = call_result.state
+
+    return ProviderCallResult(
+        None,
+        _format_auto_provider_error(statuses, attempted + ([last_error] if last_error else [])),
+        current_state,
+        "auto",
+        model or "",
+    )
 
 
 def _chunk_content(content: str, strategy: str, size: int) -> list[str]:
@@ -806,6 +1162,20 @@ TOOL_DEFINITIONS = [
         },
     ),
     Tool(
+        name="rlm_provider_status",
+        description="Report which sub-call providers are configured and usable right now, including local Ollama models when requested.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "include_models": {
+                    "type": "boolean",
+                    "description": "Include discovered Ollama model names",
+                    "default": False,
+                },
+            },
+        },
+    ),
+    Tool(
         name="rlm_sub_query_batch",
         description="Process multiple chunks in parallel. Respects concurrency limit to manage system resources. Set max_depth > 0 to allow sub-LLMs to use RLM tools for hierarchical decomposition.",
         inputSchema={
@@ -1046,9 +1416,9 @@ async def _handle_sub_query(arguments: dict) -> list[TextContent]:
     query = arguments["query"]
     ctx_name = arguments["context_name"]
     chunk_index = arguments.get("chunk_index")
-    provider = arguments.get("provider", "claude-sdk")
-    model = arguments.get("model") or DEFAULT_MODELS.get(provider, "claude-haiku-4-5-20250514")
-    max_depth = arguments.get("max_depth", 0)
+    provider = arguments.get("provider", _default_provider())
+    model = arguments.get("model")
+    max_depth = max(0, min(_coerce_int(arguments.get("max_depth", 0), 0), 5))
 
     error = _ensure_context_loaded(ctx_name)
     if error:
@@ -1068,30 +1438,32 @@ async def _handle_sub_query(arguments: dict) -> list[TextContent]:
     state = RecursionState(max_depth=max_depth) if max_depth > 0 else None
     tools = _get_rlm_tools_for_subcall() if max_depth > 0 else None
 
-    result, error, final_state = await _make_provider_call(
+    call_result = await _make_provider_call(
         provider, model, query, context_content, tools, state
     )
 
-    if error:
+    if call_result.error:
         return _text_response({
             "error": "provider_error",
             "provider": provider,
-            "model": model,
-            "message": error,
+            "resolved_provider": call_result.provider,
+            "model": call_result.model,
+            "message": call_result.error,
         })
 
     response = {
         "provider": provider,
-        "model": model,
-        "response": result,
+        "resolved_provider": call_result.provider,
+        "model": call_result.model,
+        "response": call_result.result,
     }
 
     # Include recursion info if state was used
-    if final_state:
+    if call_result.state:
         response["recursion"] = {
             "max_depth": max_depth,
-            "depth_reached": final_state.current_depth,
-            "call_trace": final_state.call_trace,
+            "depth_reached": call_result.state.current_depth,
+            "call_trace": call_result.state.call_trace,
         }
 
     return _text_response(response)
@@ -1154,15 +1526,39 @@ async def _handle_list_contexts(_arguments: dict) -> list[TextContent]:
     return _text_response({"contexts": ctx_list})
 
 
+async def _handle_provider_status(arguments: dict) -> list[TextContent]:
+    """Report provider availability and recommended defaults."""
+    include_models = bool(arguments.get("include_models", False))
+    statuses = await _collect_provider_status(include_models=include_models)
+    simple_candidates = [
+        provider for provider in AUTO_PROVIDER_ORDER_SIMPLE
+        if statuses.get(provider, {}).get("available")
+    ]
+    recursive_candidates = [
+        provider for provider in AUTO_PROVIDER_ORDER_RECURSIVE
+        if statuses.get(provider, {}).get("available") and statuses.get(provider, {}).get("recursive_tool_calls")
+    ]
+    return _text_response({
+        "default_provider": _default_provider(),
+        "recommended_simple": simple_candidates[0] if simple_candidates else None,
+        "recommended_recursive": recursive_candidates[0] if recursive_candidates else None,
+        "providers": statuses,
+        "env": {
+            "RLM_DATA_DIR": str(DATA_DIR),
+            "OLLAMA_URL": os.environ.get("OLLAMA_URL", "http://localhost:11434"),
+        },
+    })
+
+
 async def _handle_sub_query_batch(arguments: dict) -> list[TextContent]:
     """Process multiple chunks in parallel."""
     query = arguments["query"]
     ctx_name = arguments["context_name"]
     chunk_indices = arguments["chunk_indices"]
-    provider = arguments.get("provider", "claude-sdk")
-    model = arguments.get("model") or DEFAULT_MODELS.get(provider, "claude-haiku-4-5-20250514")
-    concurrency = min(arguments.get("concurrency", 4), 8)
-    max_depth = arguments.get("max_depth", 0)
+    provider = arguments.get("provider", _default_provider())
+    model = arguments.get("model")
+    concurrency = max(1, min(_coerce_int(arguments.get("concurrency", 4), 4), 8))
+    max_depth = max(0, min(_coerce_int(arguments.get("max_depth", 0), 0), 5))
 
     error = _ensure_context_loaded(ctx_name)
     if error:
@@ -1200,32 +1596,36 @@ async def _handle_sub_query_batch(arguments: dict) -> list[TextContent]:
             # Create fresh state for each chunk to avoid cross-contamination
             state = RecursionState(max_depth=max_depth) if max_depth > 0 else None
 
-            result, error, final_state = await _make_provider_call(
+            call_result = await _make_provider_call(
                 provider, model, query, chunk_content, tools, state
             )
 
-            if error:
+            if call_result.error:
                 return {
                     "chunk_index": chunk_idx,
                     "error": "provider_error",
-                    "message": error,
+                    "provider": provider,
+                    "resolved_provider": call_result.provider,
+                    "model": call_result.model,
+                    "message": call_result.error,
                 }
 
             chunk_result = {
                 "chunk_index": chunk_idx,
-                "response": result,
+                "response": call_result.result,
                 "provider": provider,
-                "model": model,
+                "resolved_provider": call_result.provider,
+                "model": call_result.model,
             }
 
             # Track recursion stats
-            if final_state:
+            if call_result.state:
                 chunk_result["recursion"] = {
-                    "depth_reached": final_state.current_depth,
-                    "call_trace": final_state.call_trace,
+                    "depth_reached": call_result.state.current_depth,
+                    "call_trace": call_result.state.call_trace,
                 }
-                max_depth_reached = max(max_depth_reached, final_state.current_depth)
-                total_recursive_calls += len(final_state.call_trace)
+                max_depth_reached = max(max_depth_reached, call_result.state.current_depth)
+                total_recursive_calls += len(call_result.state.call_trace)
 
             return chunk_result
 
@@ -1259,8 +1659,8 @@ async def _handle_auto_analyze(arguments: dict) -> list[TextContent]:
     ctx_name = arguments["name"]
     content = arguments["content"]
     goal = arguments["goal"]
-    provider = arguments.get("provider", "claude-sdk")
-    concurrency = min(arguments.get("concurrency", 4), 8)
+    provider = arguments.get("provider", _default_provider())
+    concurrency = max(1, min(_coerce_int(arguments.get("concurrency", 4), 4), 8))
 
     # Load the content
     await _handle_load_context({"name": ctx_name, "content": content})
@@ -1442,6 +1842,7 @@ TOOL_HANDLERS = {
     "rlm_store_result": _handle_store_result,
     "rlm_get_results": _handle_get_results,
     "rlm_list_contexts": _handle_list_contexts,
+    "rlm_provider_status": _handle_provider_status,
     "rlm_sub_query_batch": _handle_sub_query_batch,
     "rlm_auto_analyze": _handle_auto_analyze,
     "rlm_exec": _handle_exec,

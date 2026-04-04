@@ -77,6 +77,9 @@ Add to `~/.claude/.mcp.json`:
 ```
 
 > Replace paths with your actual `pwd` output. `RLM_DATA_DIR` is where contexts and results are stored.
+> If you launch via `run_rlm.sh`, the wrapper will prefer the shared helper at `${XDG_DATA_HOME:-$HOME/.local/share}/agent-tools/keychain_env.sh`, then fall back to the repo copy at `scripts/lib/keychain_env.sh`.
+> The wrapper will then try to load `OPENROUTER_API_KEY` from the macOS Keychain item `rlm-openrouter` first, then `openclaw-openrouter`, and only fall back to an already-exported environment variable if neither Keychain item exists.
+> Refresh the shared helper install after updates with `scripts/sync_shared_keychain_helper.sh`.
 
 ### Verify
 
@@ -93,7 +96,7 @@ Ask Claude to analyze any large file. If RLM is connected, it will use the tools
 flowchart TB
     CC["Claude Code<br/>(orchestrator)"] --> RLM["RLM MCP Server"]
     RLM --> CS["Claude SDK<br/>Haiku 4.5"]
-    RLM --> OA["OpenAI<br/>gpt-4o-mini"]
+    RLM --> OA["OpenAI<br/>gpt-5.4-mini"]
     RLM --> OR["OpenRouter<br/>multi-model"]
     RLM --> OL["Ollama<br/>local / free"]
 
@@ -210,10 +213,12 @@ Sub-queries are processed by lightweight sub-LLMs. Pick the right one for your u
 
 | Provider | Default Model | Cost | Recursive Tool Calls | Best For |
 |----------|--------------|------|---------------------|----------|
-| `claude-sdk` | Haiku 4.5 | API | Limited | Default, simple analysis |
-| `openai` | gpt-4o-mini | API | Yes | Direct OpenAI, recursion |
-| `openrouter` | openai/gpt-4o-mini | API | Yes | Multi-model routing |
+| `claude-sdk` | Haiku 4.5 | SDK auth | Limited | Last-resort single-turn fallback |
+| `openai` | gpt-5.4-mini | API | Yes | Direct OpenAI, recursion |
+| `openrouter` | openai/gpt-5.4-mini | API | Yes | Recommended hosted default |
 | `ollama` | gemma3:27b | **Free** | Yes | Local inference, zero cost |
+
+`provider="auto"` now prefers `openrouter`, then `ollama`, then `openai`, and only falls back to `claude-sdk` for non-recursive single-turn work.
 
 ### Recursive Sub-Queries
 
@@ -276,7 +281,7 @@ rlm_sub_query_batch(
     context_name="my_doc",
     chunk_indices=[0, 1, 2, 3],
     provider="openai",
-    model="gpt-4o-mini",
+    model="gpt-5.4-mini",
     max_depth=1
 )
 ```

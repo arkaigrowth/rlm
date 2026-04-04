@@ -11,6 +11,8 @@ downloads/
 eggs/
 .eggs/
 lib/
+!scripts/lib/
+!scripts/lib/keychain_env.sh
 lib64/
 parts/
 sdist/
@@ -68,8 +70,7 @@ vendor/
 run_log.md
 docs/rlm-team-guide.md
 
-# Shell wrapper with local paths (users create their own)
-run_rlm.sh
+# Shell wrappers
 
 # README process artifacts
 README.beautified.md

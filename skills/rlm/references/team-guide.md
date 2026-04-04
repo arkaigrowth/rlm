@@ -18,6 +18,9 @@ It stores data externally, chunks it, runs small sub-calls, and merges answers.
 
 ## Recommended Defaults
 
+- Hosted default: `provider="openrouter"`, model `openai/gpt-5.4-mini`
+- Stronger retry pass: `provider="openrouter"`, model `openai/gpt-5.4`
+- `provider="auto"` prefers `openrouter`, then `ollama`, then `openai`
 - `max_depth=0` first pass
 - raise to `max_depth=1` only for unresolved chunks
 - do not exceed `max_depth=2`
