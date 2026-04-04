@@ -11,9 +11,11 @@ import hashlib
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -53,6 +55,11 @@ for directory in [CONTEXTS_DIR, CHUNKS_DIR, RESULTS_DIR]:
 contexts: dict[str, dict] = {}
 
 server = Server("rlm")
+
+# Idle timeout: exit if no tool calls for this many seconds.
+# Prevents zombie processes when the parent session disconnects without cleanup.
+IDLE_TIMEOUT_SECONDS = int(os.environ.get("RLM_IDLE_TIMEOUT", "1800"))  # default 30 min
+_last_activity = time.monotonic()
 
 # Default models per provider
 DEFAULT_MODELS = {
@@ -1870,20 +1877,47 @@ TOOL_HANDLERS = {
 @server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     """Route tool calls to their handlers."""
+    global _last_activity
+    _last_activity = time.monotonic()
     handler = TOOL_HANDLERS.get(name)
     if handler:
         return await handler(arguments)
     return _text_response(f"Unknown tool: {name}")
 
 
+async def _idle_watchdog():
+    """Exit the process if no tool calls arrive within the idle timeout.
+
+    Prevents zombie MCP server processes when the parent session
+    disconnects without properly terminating the child.
+    """
+    if IDLE_TIMEOUT_SECONDS <= 0:
+        return  # disabled
+
+    while True:
+        await asyncio.sleep(60)  # check every minute
+        idle = time.monotonic() - _last_activity
+        if idle >= IDLE_TIMEOUT_SECONDS:
+            print(
+                f"RLM: idle timeout ({IDLE_TIMEOUT_SECONDS}s) reached, shutting down.",
+                file=sys.stderr,
+            )
+            os.kill(os.getpid(), signal.SIGTERM)
+            return
+
+
 async def main():
     """Run the MCP server."""
-    async with stdio_server() as (read_stream, write_stream):
-        await server.run(
-            read_stream,
-            write_stream,
-            server.create_initialization_options(),
-        )
+    watchdog = asyncio.create_task(_idle_watchdog())
+    try:
+        async with stdio_server() as (read_stream, write_stream):
+            await server.run(
+                read_stream,
+                write_stream,
+                server.create_initialization_options(),
+            )
+    finally:
+        watchdog.cancel()
 
 
 if __name__ == "__main__":
