@@ -31,8 +31,8 @@ if keychain_export_secret_optional OPENROUTER_API_KEY "$KEY_OPENROUTER_PRIMARY" 
       echo "INFO: Using inherited OPENROUTER_API_KEY because no matching Keychain item was found." >&2
     fi
   fi
-elif [ "${RLM_DEFAULT_PROVIDER}" = "openrouter" ]; then
-  echo "WARN: No OpenRouter key found in Keychain items '$KEY_OPENROUTER_PRIMARY' / '$KEY_OPENROUTER_LEGACY' or inherited environment." >&2
+else
+  echo "WARN: No OpenRouter key found (tried Keychain: '$KEY_OPENROUTER_PRIMARY', '$KEY_OPENROUTER_LEGACY'; env: \$OPENROUTER_API_KEY). Sub-calls will fall back to ollama or claude-sdk." >&2
 fi
 
 cd "$SCRIPT_DIR"
