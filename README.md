@@ -10,7 +10,7 @@
 [![MCP Compatible](https://img.shields.io/badge/MCP-compatible-8A2BE2)](https://modelcontextprotocol.io)
 [![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](https://github.com/arkaigrowth/rlm/releases)
 
-[Quick Start](#quick-start) · [How It Works](#how-it-works) · [Tools](#tools) · [Providers](#providers) · [Credits](#credits)
+[Quick Start](#quick-start) · [Demo](#demo) · [How It Works](#how-it-works) · [Tools](#tools) · [Providers](#providers) · [Credits](#credits)
 
 </div>
 
@@ -18,7 +18,7 @@
 
 ## The Core Idea
 
-RLM is an MCP server that implements **Recursive Language Model** patterns from [MIT research](https://arxiv.org/abs/2512.24601) by Tian Jin et al. Instead of stuffing massive contexts into your prompt and hoping for the best, RLM treats context as an **external variable** — loading, chunking, and querying it recursively while keeping your main context window clean.
+RLM is an MCP server that implements **Recursive Language Model** patterns from [MIT research](https://arxiv.org/abs/2512.24601) by Tian Jin et al. Instead of stuffing massive contexts into your prompt and hoping for the best, RLM treats context as an **external variable**, loading, chunking, and querying it recursively while keeping your main context window clean.
 
 ```
 You say:  "Analyze this 2MB log file for errors"
@@ -40,6 +40,20 @@ You never call RLM tools directly. Claude reaches for them when it needs to.
 | **RLM** | Full content stays external. Query any part. Sub-LLMs analyze chunks in parallel. Nothing lost. |
 
 The key insight from the [paper](https://arxiv.org/abs/2512.24601): **context is data, not prompt**. Treat it like a database, not a conversation.
+
+---
+
+## Demo
+
+<!-- TODO(Alex): record the 2M-token walkthrough as an asciinema cast and embed it here.
+     Capture with `asciinema rec demo.cast`, then run the Test Corpus example end to end
+     against the ~2M-token Encyclopedia Britannica corpus. Replace this placeholder with the
+     embedded player (an asciinema.org link or an SVG cast). Use real terminal output from the
+     recording, not a hand-written transcript. -->
+
+_Recording planned._ A full asciinema walkthrough of a ~2M-token analysis run is on the list
+for this section. The exact commands it will demonstrate live in the [Test Corpus](#test-corpus)
+section below.
 
 ---
 
@@ -160,7 +174,7 @@ flowchart LR
     E --> F["Store Results"]
     F --> G{"Confident?"}
     G -->|Yes| H["Aggregate<br/>& Return"]
-    G -->|"No — recurse"| D
+    G -->|"No, recurse"| D
 
     style A fill:#e94560,stroke:#1a1a2e,color:#fff
     style H fill:#2ecc71,stroke:#1a1a2e,color:#fff
@@ -170,22 +184,22 @@ flowchart LR
 
 **The pattern is always the same:**
 
-1. **Load** — content becomes an external variable (stays out of your prompt)
-2. **Inspect** — understand structure without reading everything
-3. **Filter** — narrow the search space with regex before spending tokens
-4. **Chunk** — split strategically by lines, characters, or paragraphs
-5. **Sub-query** — ask focused questions of each chunk via sub-LLMs
-6. **Aggregate** — combine results, resolve conflicts, report gaps
+1. **Load**: content becomes an external variable (stays out of your prompt)
+2. **Inspect**: understand structure without reading everything
+3. **Filter**: narrow the search space with regex before spending tokens
+4. **Chunk**: split strategically by lines, characters, or paragraphs
+5. **Sub-query**: ask focused questions of each chunk via sub-LLMs
+6. **Aggregate**: combine results, resolve conflicts, report gaps
 
 ---
 
 ## Tools
 
-> These are used by Claude internally. You don't call them — you just ask Claude to analyze large files.
+> These are used by Claude internally. You don't call them, you just ask Claude to analyze large files.
 
 | Tool | Purpose |
 |------|---------|
-| `rlm_auto_analyze` | **One-step analysis** — detects type, chunks, queries automatically |
+| `rlm_auto_analyze` | **One-step analysis**: detects type, chunks, queries automatically |
 | `rlm_load_context` | Load content as external variable |
 | `rlm_inspect_context` | Get structure info without loading into prompt |
 | `rlm_chunk_context` | Split by lines, characters, or paragraphs |
@@ -214,7 +228,7 @@ It detects content type (Python, JSON, logs, prose), selects the right chunking 
 
 ### Programmatic Analysis
 
-For deterministic extraction — regex, counting, parsing — `rlm_exec` runs Python directly against a loaded context:
+For deterministic extraction (regex, counting, parsing), `rlm_exec` runs Python directly against a loaded context:
 
 ```python
 rlm_exec(
@@ -251,9 +265,9 @@ Sub-queries are processed by lightweight sub-LLMs. Pick the right one for your u
 | `openrouter` | openai/gpt-5.4-mini | API | **Yes** | **Recommended hosted default** |
 | `openai` | gpt-5.4-mini | API | Yes | Direct OpenAI, recursion |
 | `ollama` | auto-detected | **Free** | Yes | Local inference, zero cost |
-| `claude-sdk` | Haiku 4.5 | Subscription | **No** — single-turn only | Last-resort fallback when no API keys available |
+| `claude-sdk` | Haiku 4.5 | Subscription | **No**, single-turn only | Last-resort fallback when no API keys available |
 
-`provider="auto"` prefers `openrouter`, then `ollama`, then `openai` for both simple and recursive calls. `claude-sdk` is only used as a last-resort fallback for non-recursive single-turn work — it does **not** support recursive tool-calling (each call spawns a full CLI subprocess, making it too slow and expensive for recursion).
+`provider="auto"` prefers `openrouter`, then `ollama`, then `openai` for both simple and recursive calls. `claude-sdk` is only used as a last-resort fallback for non-recursive single-turn work. It does **not** support recursive tool-calling (each call spawns a full CLI subprocess, making it too slow and expensive for recursion).
 
 ### Recursive Sub-Queries
 
@@ -346,27 +360,27 @@ rlm_sub_query(
 
 ## Auto-Detection
 
-Teach Claude to reach for RLM tools automatically — no manual invocation needed.
+Teach Claude to reach for RLM tools automatically, no manual invocation needed.
 
-**1. CLAUDE.md Integration** — Copy `CLAUDE.md.example` to your project's `CLAUDE.md` (or `~/.claude/CLAUDE.md` for global).
+**1. CLAUDE.md Integration**: Copy `CLAUDE.md.example` to your project's `CLAUDE.md` (or `~/.claude/CLAUDE.md` for global).
 
-**2. Hook Installation** — Auto-suggests RLM when reading files >25KB:
+**2. Hook Installation**: Auto-suggests RLM when reading files >25KB:
 ```bash
 cp -r .claude/hooks/ /path/to/your-project/.claude/hooks/
 ```
 
-**3. Skill Reference** — Comprehensive operational guidance:
+**3. Skill Reference**: Comprehensive operational guidance:
 ```bash
 cp -r skills/ /path/to/your-project/skills/
 ```
 
-The skill system includes **budgets, guardrails, query patterns, and fail-fast contracts** — production-grade controls for recursive analysis. See `skills/rlm/SKILL.md` for the full operational profile.
+The skill system includes **budgets, guardrails, query patterns, and fail-fast contracts**, explicit controls for recursive analysis. See `skills/rlm/SKILL.md` for the full operational profile.
 
 ---
 
 ## Test Corpus
 
-The repository supports testing with the **Encyclopedia Britannica, 11th Edition** (1910–1911) from Project Gutenberg — 11MB, ~2M tokens.
+The repository supports testing with the **Encyclopedia Britannica, 11th Edition** (1910-1911) from Project Gutenberg, 11MB and about 2M tokens.
 
 ```bash
 # Download the test corpus
@@ -437,10 +451,10 @@ How would I add a new provider (e.g., Gemini direct API)?
 
 ## Credits
 
-Built on [Richard White's RLM](https://github.com/richardwhiteii/rlm) — the first MCP server implementing recursive language model patterns.
+Built on [Richard White's RLM](https://github.com/richardwhiteii/rlm), an early MCP server implementing recursive language model patterns.
 
 Based on research by **Tian Jin et al.** at MIT:
-> [Recursive Language Models](https://arxiv.org/abs/2512.24601) (2024) — Introduced the paradigm of treating LLM context as an external variable and using recursive sub-model calls for unbounded context processing.
+> [Recursive Language Models](https://arxiv.org/abs/2512.24601) (2025). Introduced the paradigm of treating LLM context as an external variable and using recursive sub-model calls for unbounded context processing.
 
 Encyclopedia Britannica test corpus from [Project Gutenberg](https://www.gutenberg.org/). Public domain.
 
@@ -448,7 +462,7 @@ Encyclopedia Britannica test corpus from [Project Gutenberg](https://www.gutenbe
 
 ## License
 
-[MIT](LICENSE) — Use it, fork it, ship it.
+[MIT](LICENSE). Use it, fork it, ship it.
 
 ---
 
