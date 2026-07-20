@@ -14,7 +14,7 @@ It stores data externally, chunks it, runs small sub-calls, and merges answers.
 | `openrouter` | `OPENROUTER_API_KEY` | **Recommended hosted default** | Yes |
 | `openai` | `OPENAI_API_KEY` | Hosted setup without OpenRouter | Yes |
 | `ollama` | none (local runtime) | Local/private/zero cost | Yes |
-| `claude-sdk` | Claude SDK auth (auto) | Simple single-turn fallback only | **No** — fails fast if recursive tools requested |
+| `claude-sdk` | Claude SDK auth (auto) | Simple single-turn fallback only | **No** (fails fast if recursive tools requested) |
 
 ## Recommended Defaults
 

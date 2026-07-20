@@ -45,12 +45,6 @@ The key insight from the [paper](https://arxiv.org/abs/2512.24601): **context is
 
 ## Demo
 
-<!-- TODO(Alex): record the 2M-token walkthrough as an asciinema cast and embed it here.
-     Capture with `asciinema rec demo.cast`, then run the Test Corpus example end to end
-     against the ~2M-token Encyclopedia Britannica corpus. Replace this placeholder with the
-     embedded player (an asciinema.org link or an SVG cast). Use real terminal output from the
-     recording, not a hand-written transcript. -->
-
 _Recording planned._ A full asciinema walkthrough of a ~2M-token analysis run is on the list
 for this section. The exact commands it will demonstrate live in the [Test Corpus](#test-corpus)
 section below.
