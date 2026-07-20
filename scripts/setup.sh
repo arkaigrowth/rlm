@@ -1,8 +1,8 @@
 #!/bin/bash
-# RLM Setup — Configure MCP server for Claude Code and/or Claude Desktop.
+# RLM Setup. Configure MCP server for Claude Code and/or Claude Desktop.
 #
 # Usage:
-#   ./scripts/setup.sh              # interactive — asks which targets to configure
+#   ./scripts/setup.sh              # interactive (asks which targets to configure)
 #   ./scripts/setup.sh --code       # Claude Code only
 #   ./scripts/setup.sh --desktop    # Claude Desktop only
 #   ./scripts/setup.sh --all        # both
@@ -41,7 +41,7 @@ check_deps() {
     fi
 }
 
-# ── JSON helpers (python3 — no jq dependency) ─────────────────────────
+# ── JSON helpers (python3, no jq dependency) ─────────────────────────
 json_has_key() {
     # json_has_key <file> <dot.path>   e.g. json_has_key file.json mcpServers.rlm
     python3 -c "
@@ -94,7 +94,7 @@ check_status() {
     if [ -f "$REPO_DIR/.venv/bin/python" ]; then
         ok "Python venv exists"
     else
-        warn "Python venv missing — run 'uv sync' first"
+        warn "Python venv missing, run 'uv sync' first"
     fi
 
     # Claude Code
@@ -173,7 +173,7 @@ setup_skill_symlink() {
 
 setup_claude_code() {
     if [ ! -f "$CC_SETTINGS" ]; then
-        warn "Claude Code settings.json not found — skipping"
+        warn "Claude Code settings.json not found, skipping"
         return
     fi
 
@@ -187,7 +187,7 @@ setup_claude_code() {
 
 setup_claude_desktop() {
     if [ ! -f "$CD_CONFIG" ]; then
-        warn "Claude Desktop config not found — skipping"
+        warn "Claude Desktop config not found, skipping"
         return
     fi
 
