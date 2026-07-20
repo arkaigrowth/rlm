@@ -43,14 +43,6 @@ The key insight from the [paper](https://arxiv.org/abs/2512.24601): **context is
 
 ---
 
-## Demo
-
-_Recording planned._ A full asciinema walkthrough of a ~2M-token analysis run is on the list
-for this section. The exact commands it will demonstrate live in the [Test Corpus](#test-corpus)
-section below.
-
----
-
 ## Quick Start
 
 ### Install
