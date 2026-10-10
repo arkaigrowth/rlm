@@ -8,9 +8,8 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-3776AB?logo=python&logoColor=white)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![MCP Compatible](https://img.shields.io/badge/MCP-compatible-8A2BE2)](https://modelcontextprotocol.io)
-[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](https://github.com/arkaigrowth/rlm/releases)
 
-[Quick Start](#quick-start) · [Demo](#demo) · [How It Works](#how-it-works) · [Tools](#tools) · [Providers](#providers) · [Credits](#credits)
+[Quick Start](#quick-start) · [How It Works](#how-it-works) · [Tools](#tools) · [Providers](#providers) · [Credits](#credits)
 
 </div>
 
@@ -20,7 +19,7 @@
 
 ## The Core Idea
 
-RLM is an MCP server that implements **Recursive Language Model** patterns from [MIT research](https://arxiv.org/abs/2512.24601) by Tian Jin et al. Instead of stuffing massive contexts into your prompt and hoping for the best, RLM treats context as an **external variable**, loading, chunking, and querying it recursively while keeping your main context window clean.
+RLM is an MCP server that implements **Recursive Language Model** patterns from the [Recursive Language Models](https://arxiv.org/abs/2512.24601) paper by Alex L. Zhang, Tim Kraska, and Omar Khattab (MIT, 2025). Instead of stuffing massive contexts into your prompt and hoping for the best, RLM treats context as an **external variable**, loading, chunking, and querying it recursively while keeping your main context window clean.
 
 ```
 You say:  "Analyze this 2MB log file for errors"
@@ -449,7 +448,7 @@ Alex Kamysz's additions on top of that base (details and dates in [CHANGES.md](C
 - Claude SDK hardening, Ollama model-resolution fix, `scripts/setup.sh` for Claude Code and Claude Desktop
 - a rewritten cross-agent skill (`skills/rlm/`) with budgets, recursion limits, and query patterns
 
-Based on research by **Tian Jin et al.** at MIT:
+Based on research by **Alex L. Zhang, Tim Kraska, and Omar Khattab** at MIT:
 > [Recursive Language Models](https://arxiv.org/abs/2512.24601) (2025). Introduced the paradigm of treating LLM context as an external variable and using recursive sub-model calls for unbounded context processing.
 
 Encyclopedia Britannica test corpus from [Project Gutenberg](https://www.gutenberg.org/). Public domain.
