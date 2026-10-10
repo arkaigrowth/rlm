@@ -8,17 +8,18 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-3776AB?logo=python&logoColor=white)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![MCP Compatible](https://img.shields.io/badge/MCP-compatible-8A2BE2)](https://modelcontextprotocol.io)
-[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](https://github.com/arkaigrowth/rlm/releases)
 
-[Quick Start](#quick-start) · [Demo](#demo) · [How It Works](#how-it-works) · [Tools](#tools) · [Providers](#providers) · [Credits](#credits)
+[Quick Start](#quick-start) · [How It Works](#how-it-works) · [Tools](#tools) · [Providers](#providers) · [Credits](#credits)
 
 </div>
 
 ---
 
+> **Fork notice.** This is a fork of [Richard White's rlm](https://github.com/richardwhiteii/rlm) (MIT), which built the original MCP server. This fork adds OpenRouter and hosted-model providers, a Keychain-backed launcher, a sandbox import blocklist, an idle-timeout watchdog, a setup script, and a rewritten skill. See [Credits](#credits) and [CHANGES.md](CHANGES.md) for the exact split.
+
 ## The Core Idea
 
-RLM is an MCP server that implements **Recursive Language Model** patterns from [MIT research](https://arxiv.org/abs/2512.24601) by Tian Jin et al. Instead of stuffing massive contexts into your prompt and hoping for the best, RLM treats context as an **external variable**, loading, chunking, and querying it recursively while keeping your main context window clean.
+RLM is an MCP server that implements **Recursive Language Model** patterns from the [Recursive Language Models](https://arxiv.org/abs/2512.24601) paper by Alex L. Zhang, Tim Kraska, and Omar Khattab (MIT, 2025). Instead of stuffing massive contexts into your prompt and hoping for the best, RLM treats context as an **external variable**, loading, chunking, and querying it recursively while keeping your main context window clean.
 
 ```
 You say:  "Analyze this 2MB log file for errors"
@@ -437,9 +438,17 @@ How would I add a new provider (e.g., Gemini direct API)?
 
 ## Credits
 
-Built on [Richard White's RLM](https://github.com/richardwhiteii/rlm), an early MCP server implementing recursive language model patterns.
+This repository is a fork of [Richard White's RLM](https://github.com/richardwhiteii/rlm), an early MCP server implementing recursive language model patterns. Richard wrote the original server (`src/rlm_mcp_server.py`: context loading, chunking, filtering, sub-queries, `rlm_exec`, `rlm_auto_analyze`), the auto-interception hook, the first skill, and the original README. His MIT notice is preserved in [LICENSE](LICENSE) and his commits remain in this repository's history.
 
-Based on research by **Tian Jin et al.** at MIT:
+Alex Kamysz's additions on top of that base (details and dates in [CHANGES.md](CHANGES.md)):
+
+- OpenRouter and OpenAI hosted providers, provider auto-selection, GPT-5.4-mini defaults
+- Keychain-backed secret loading (`run_rlm.sh`, `scripts/lib/keychain_env.sh`, `docs/keychain-env-contract.md`)
+- import blocklist for the `rlm_exec` sandbox and an idle-timeout watchdog against zombie MCP processes
+- Claude SDK hardening, Ollama model-resolution fix, `scripts/setup.sh` for Claude Code and Claude Desktop
+- a rewritten cross-agent skill (`skills/rlm/`) with budgets, recursion limits, and query patterns
+
+Based on research by **Alex L. Zhang, Tim Kraska, and Omar Khattab** at MIT:
 > [Recursive Language Models](https://arxiv.org/abs/2512.24601) (2025). Introduced the paradigm of treating LLM context as an external variable and using recursive sub-model calls for unbounded context processing.
 
 Encyclopedia Britannica test corpus from [Project Gutenberg](https://www.gutenberg.org/). Public domain.
@@ -448,7 +457,7 @@ Encyclopedia Britannica test corpus from [Project Gutenberg](https://www.gutenbe
 
 ## License
 
-[MIT](LICENSE). Use it, fork it, ship it.
+[MIT](LICENSE). Original work Copyright (c) 2025 Richard White; modifications Copyright (c) 2026 Alex Kamysz. Use it, fork it, ship it.
 
 ---
 

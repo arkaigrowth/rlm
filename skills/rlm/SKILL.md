@@ -6,6 +6,8 @@ argument-hint: [target or question]
 
 # Recursive RLM
 
+This skill ships with arkaigrowth/rlm, a fork of Richard White's rlm (https://github.com/richardwhiteii/rlm, MIT). The workflow below was rewritten for this fork; the MCP tools it drives come from the upstream server plus this fork's provider and safety additions.
+
 Use recursive sub-model calls to search and analyze large contexts without overloading the main context window.
 
 Apply this workflow with the RLM MCP tools:

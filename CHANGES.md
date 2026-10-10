@@ -1,6 +1,6 @@
 # Fork Changes
 
-> Fork of [richardwhiteii/rlm](https://github.com/richardwhiteii/rlm) for arkai integration
+> Fork of [richardwhiteii/rlm](https://github.com/richardwhiteii/rlm) (MIT, Copyright (c) 2025 Richard White). Everything not listed below is upstream's work; the upstream commits are preserved in this repository's history.
 
 ## 2026-04-04: Claude SDK Hardening + Ollama Bug Fix
 
